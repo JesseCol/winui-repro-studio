@@ -1,0 +1,12 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x86" />
+    <Platform Name="x64" />
+    <Platform Name="ARM64" />
+  </Configurations>
+  <Folder Name="/src/">
+    <Project Path="src/ReproStudio.Host/ReproStudio.Host.csproj" />
+    <Project Path="src/ReproStudio.Runner/ReproStudio.Runner.csproj" />
+    <Project Path="src/ReproStudio.Shared/ReproStudio.Shared.csproj" />
+  </Folder>
+</Solution>

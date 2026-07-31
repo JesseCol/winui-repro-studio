@@ -1,0 +1,10 @@
+<Project>
+  <!--
+    Standalone tool: do NOT inherit the parent repo's build props
+    (D:\jecollin\directory.build.props redirects OutDir/IntDir to _build\...).
+    That custom layout hides the packaged .exe from the winapp CLI, so launching
+    fails. This file lives above our src\ projects, which stops MSBuild's upward
+    search and restores the default bin\<Platform>\<Config>\<TFM>\win-<rid>
+    output layout that winapp run / dotnet run expect.
+  -->
+</Project>

@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "ReproStudio.Runner (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "ReproStudio.Runner (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}

@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RootNamespace>ReproStudio_Runner</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Platforms>x86;x64;ARM64</Platforms>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-$([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLowerInvariant())</RuntimeIdentifier>
+    <UseWinUI>true</UseWinUI>
+    <WinUISDKReferences>false</WinUISDKReferences>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <!--
+      Unpackaged on purpose: the host launches this as a plain .exe so we can run
+      arbitrary self-contained WASDK versions side by side (version isolation).
+      This is the intended design, NOT a workaround for a launch issue.
+
+      Self-contained on purpose: only a self-contained build loads the WASDK native
+      DLLs sitting NEXT TO the exe. A framework-dependent build instead uses the
+      bootstrapper to find an *installed* framework, which defeats the whole point
+      (dropping a different version's DLLs next to the exe would be ignored). The
+      host provisioner overlays each target version's native DLLs (native only, so
+      the compiled-in managed assemblies keep matching) onto a fresh copy of the base.
+    -->
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <EnableMsixTooling>false</EnableMsixTooling>
+
+    <!-- WASDK version is overridable so the host can publish a runner per version. -->
+    <WasdkVersion Condition="'$(WasdkVersion)' == ''">2.2.0</WasdkVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.3.0" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="$(WasdkVersion)" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2270" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ReproStudio.Shared\ReproStudio.Shared.csproj" />
+  </ItemGroup>
+
+</Project>

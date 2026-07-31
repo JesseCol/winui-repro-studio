@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+  Sparse-package identity for the (normally unpackaged) runner exe.
+
+  The "Launch packaged (with identity)" option in the host hands this manifest to
+  `winapp create-debug-identity <runner.exe>`, which registers a sparse package
+  whose external location is the runner's own folder. After that, launching the
+  runner exe runs it *with package identity* - handy for reproing bugs that only
+  show up packaged. Turning the option off unregisters it again.
+
+  This is NOT the host's own package manifest (that one lives at the project root).
+  The Executable below is resolved relative to the runner's folder (the sparse
+  package's external location), not this manifest's folder.
+-->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap rescap">
+
+  <Identity
+    Name="ReproStudio.Runner"
+    Publisher="CN=AppPublisher"
+    Version="1.0.0.0" />
+
+  <Properties>
+    <DisplayName>ReproStudio Runner</DisplayName>
+    <PublisherDisplayName>AppPublisher</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.26226.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Applications>
+    <Application Id="ReproStudioRunner"
+      Executable="ReproStudio.Runner.exe"
+      EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="ReproStudio Runner"
+        Description="ReproStudio preview runner (packaged, with identity)"
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png" />
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>
