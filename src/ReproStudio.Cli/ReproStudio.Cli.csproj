@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <AssemblyName>ReproStudio</AssemblyName>
+    <RootNamespace>ReproStudio_Cli</RootNamespace>
+    <Platforms>x86;x64;ARM64</Platforms>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-$([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLowerInvariant())</RuntimeIdentifier>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <!--
+      The console host, and the thing the xcopy bundle actually ships.
+
+      Deliberately has NO Microsoft.WindowsAppSDK reference. Everything it needs is in
+      the Windows SDK projection that comes with the windows TFM - including
+      Windows.Management.Deployment.PackageManager, which is what registers the runner
+      when a repro asks for package identity.
+
+      That matters for two reasons:
+        - Size. It is a fraction of the WinUI host, because it carries no WinUI.
+        - Diagnosis. This tool exists to chase bugs in the Windows App SDK, so the thing
+          you drive it with should not itself depend on the stack under suspicion. If the
+          runner will not start, the console host still runs and can say why.
+
+      Self-contained so the target machine needs no .NET installed. The floor is Windows
+      10 1809, matching the runner.
+    -->
+    <SelfContained>true</SelfContained>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ReproStudio.Shared\ReproStudio.Shared.csproj" />
+  </ItemGroup>
+
+</Project>
