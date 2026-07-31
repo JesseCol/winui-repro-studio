@@ -25,8 +25,10 @@ internal static class Doctor
     private const int MinimumBuild = 17763;
 
     /// <summary>
-    /// Rough disk cost of one provisioned runner. Each version is a full copy of the
+    /// Disk to keep free per provisioned runner. Each version is a full copy of the
     /// base plus that version's native DLLs, so this adds up fast on a small test VM.
+    /// Measured folders run 156-260 MB; this is deliberately above that so the check
+    /// leaves room for the download cache and the staging folder.
     /// </summary>
     private const long BytesPerVersion = 350L * 1024 * 1024;
 
@@ -252,7 +254,7 @@ internal static class Doctor
             }
 
             long free = new DriveInfo(root).AvailableFreeSpace;
-            Log.Field("free", Bytes(free), "each runner needs about " + Bytes(BytesPerVersion));
+            Log.Field("free", Bytes(free), "keep about " + Bytes(BytesPerVersion) + " free per version");
 
             if (free < BytesPerVersion)
             {

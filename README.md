@@ -1,10 +1,151 @@
 # ReproStudio
 
-A little WinUI 3 app for reproducing WinUI / Windows App SDK bugs. You paste in
-some XAML (and optional C#), and it renders live in a preview window using
-whatever WASDK version you pick. Great for "does this repro on 1.6 but not 2.2?"
+A little tool for reproducing WinUI / Windows App SDK bugs. You give it some XAML
+(and optional C#), and it renders live in a preview window using whatever WASDK
+version you pick. Great for "does this repro on 1.6 but not 2.2?"
 
-## Run it
+There are two front ends over the same engine:
+
+| | `ReproStudio.exe` (console) | `ReproStudio.Host.exe` (WinUI) |
+|---|---|---|
+| What it is | Runs a `.cs` repro file, watches it, logs what it's doing | A GUI with editors, dropdowns, and a file picker |
+| Needs WASDK | No | Yes |
+| Good for | Shipping to a test machine, diagnosing a broken runner, agent/script driving | Authoring a repro on your dev box |
+
+The console host is the one you copy to another machine. It has no Windows App SDK
+dependency at all, so it still runs and can still tell you what went wrong when the
+WASDK build under test refuses to start.
+
+## Quick start
+
+Point it at a repro file:
+
+```powershell
+ReproStudio.exe samples\hello.cs
+```
+
+```
+ReproStudio
+  file      C:\ReproStudio-x64\samples\hello.cs
+  cache     C:\Users\you\AppData\Local\winui-repro-app
+  runner    C:\ReproStudio-x64\runner-base  (portable)
+  . No version asked for, using the newest: 2.3.1
+
+> provision
+  wasdk     2.3.1
+  packaged  no
+  ready: ...\versions\2.3.1\ReproStudio.Runner.exe
+
+> launch
+  running (unpackaged), pid 30528
+
+> watching
+  . Save the file to push changes. Ctrl+C to stop.
+```
+
+A preview window opens. Leave the console running, edit the file in your editor,
+and save:
+
+```
+  21:08:55  pushed  Hello from a file
+```
+
+Same window, same process - your XAML just re-rendered. That's the loop.
+
+The first run for a given version downloads it and unpacks a private copy of the
+runner, so budget a minute. Each version costs 156 to 260 MB on disk, depending
+on the version, plus the NuGet packages it caches. After that the version is
+cached and starts right away.
+
+Stuck? `ReproStudio.exe --doctor` checks the machine and says what's wrong.
+
+## Compare two WASDK versions
+
+This is what the tool is for. While it's watching, change the `wasdk:` header and
+save:
+
+```csharp
+// wasdk: 1.6
+```
+
+```
+  . 1.6 resolved to 1.6.250602001
+  21:09:01  relaunching: 1.6.250602001
+  21:09:02  running 1.6.250602001
+```
+
+`wasdk` is a launch-time key, so rather than re-rendering in place it provisions
+that version and starts a fresh runner on it. Change the header back and save
+again to flip the other way. Your XAML and C# never move.
+
+Two things worth knowing:
+
+- The Runner's footer shows the exact `Microsoft.ui.xaml.dll` it loaded, so you can
+  confirm you really are on the version you asked for.
+- Partial versions are fine. `1.6` picks the newest 1.6.x.
+
+You can also drive it from the command line, without editing the file:
+
+```powershell
+ReproStudio.exe repro.cs --wasdk 1.6      # override the header
+ReproStudio.exe --list                    # what versions can I ask for?
+```
+
+## Take it to another machine
+
+```powershell
+.\pack.ps1
+```
+
+That produces `artifacts\ReproStudio-x64.zip`. Unzip it anywhere on the target
+machine and run it:
+
+```powershell
+ReproStudio.exe samples\hello.cs
+```
+
+The target machine needs **nothing installed** - no SDK, no .NET runtime, no
+Windows App SDK runtime. It does need internet, because WASDK versions are pulled
+from NuGet on demand. The floor is **Windows 10 1809 (build 17763)**, which is the
+minimum for .NET 10 and for every WASDK version this tool provisions.
+
+If something doesn't work, ask it:
+
+```powershell
+ReproStudio.exe --doctor
+```
+
+That prints the OS build, whether it clears the 17763 floor, where the base runner
+came from, what's in the cache, and whether Developer Mode is on.
+
+## Run the console host
+
+```powershell
+ReproStudio.exe <file.cs> [options]
+```
+
+| Option | What |
+|---|---|
+| `--wasdk <version>` | WASDK version. Partial is fine (`1.6` picks the newest 1.6). Overrides the file header. |
+| `--winui <ver\|path>` | Override just the WinUI component: a version, or a local `.nupkg`. |
+| `--packaged` / `--unpackaged` | Force package identity on or off. |
+| `--prerelease` | Include prerelease versions when resolving and listing. |
+| `--no-watch` | Launch and exit, leaving the runner running. |
+| `--clear-cache` | Delete provisioned runners first (downloads are kept). |
+| `--list` | List available WASDK versions and exit. |
+| `--doctor` | Print environment diagnostics and exit. |
+
+Set `REPROSTUDIO_CACHE` to move downloads and provisioned runners off
+`%LOCALAPPDATA%`.
+
+While it's watching, saving the file pushes the change. Editing a *launch-time*
+header key (`wasdk`, `winui`, `packaged`, `dpi`) re-provisions and relaunches
+instead. If the runner dies on its own, the console says so and prints whatever
+the runner appended to its crash log.
+
+Ctrl+C stops the runner and unregisters the package.
+
+## Run the WinUI host
 
 From this folder:
 
@@ -12,14 +153,11 @@ From this folder:
 dotnet run --project .\src\ReproStudio.Host
 ```
 
-That's it. First run pulls packages and builds, so give it a minute. A window
-pops up. Paste XAML, watch it render.
+First run pulls packages and builds, so give it a minute. It also needs a base
+runner - see [The base runner](#the-base-runner-built-once) below, or just run
+`.\pack.ps1` once.
 
-> Heads up: `dotnet run` prints an AUMID and a PID, not the usual console spam.
-> That's expected, the app runs with package identity. See "How running works"
-> below if you're curious why.
-
-## Using it
+## Using the WinUI host
 
 Two windows show up: the **Host** (your editor) and the **Runner** (the live
 preview, docked to its right).
@@ -48,39 +186,28 @@ running.
 > **Careful what you paste.** The Runner compiles and runs your C# for real, with
 > **no sandbox**. Only paste code you trust. (The app warns you about this too.)
 
-## Drive it from your own editor (VS Code, etc.)
+## The repro file
 
-Don't like the built-in editors? Hit **Open file...** and point the Host at a
-single `.cs` repro file. From then on the Host just watches that file. Every time
-you save it (in VS Code, or from a script, or from an LLM), the Runner refreshes.
-The in-app editors turn into a read-only mirror so you can see what's rendering.
+A repro is one `.cs` file: a tiny `// key: value` header up top, the XAML in a
+`Xaml` raw-string, and your `Setup` method. It stays valid C#, so your editor's C#
+tooling still works. Both hosts read the same format.
+
+The console host takes it as an argument. The WinUI host takes it through **Open
+file...**, after which the in-app editors turn into a read-only mirror.
 
 Want something to open right now? There are ready-made repros in
 [`samples/`](samples/) - try `samples/hello.cs`.
 
-### Skip the picker: launch straight into a file
-
-For hands-off / agent driving, point the app at a file on launch and it opens it
-for you - no clicking:
-
-```powershell
-dotnet run --project .\src\ReproStudio.Host -p:WinAppLaunchArgs="--file D:\path\to\repro.cs"
-```
-
-Use an **absolute path** (the app is packaged, so its working directory isn't your
-shell's). After that it's the same watch-and-refresh loop: the agent just writes
-and saves the file.
-
-The whole repro lives in one `.cs` file: a tiny `// key: value` header up top, the
-XAML in a `Xaml` raw-string, and your `Setup` method. It stays valid C#, so your
-editor's C# tooling still works.
-
 ```csharp
-// repro: My cool bug
-// wasdk: 1.7            <- partial is fine; newest 1.7.x wins (see below)
-// winui: default        <- or a version, or a path to a local .nupkg
-// theme: Dark           <- Default | Light | Dark
-// flow:  LeftToRight    <- LeftToRight | RightToLeft
+// repro:      My cool bug
+// wasdk:      1.7            <- partial is fine; newest 1.7.x wins (see below)
+// winui:      default        <- or a version, or a path to a local .nupkg
+// packaged:   no             <- give the runner package identity
+// theme:      Dark           <- Default | Light | Dark
+// flow:       LeftToRight    <- LeftToRight | RightToLeft
+// dpi:        100            <- 100 to 400
+// background: #202020        <- stage colour behind your XAML
+// topmost:    no             <- keep the runner above other windows
 
 class Repro
 {
@@ -105,17 +232,24 @@ class Repro
 
 Every header key is optional, and order doesn't matter. Two kinds of keys:
 
-- **Live** (`theme`, `flow`) and the XAML/C# itself: a save just re-renders in
-  place. Fast.
-- **Launch-time** (`wasdk`, `winui`): these pick which Runner exe runs, so a change
-  re-provisions and relaunches. Same machinery as the dropdowns.
+- **Live** (`theme`, `flow`, `background`, `topmost`) and the XAML/C# itself: a
+  save just re-renders in place. Fast.
+- **Launch-time** (`wasdk`, `winui`, `packaged`, `dpi`): these pick which Runner
+  exe runs and how, so a change re-provisions and relaunches.
 
 ### You don't have to type the whole WASDK version
 
-`wasdk: 1.7` is enough. The Host matches your text against the real version list
-by dotted segments and picks the newest one that fits, so `1.7` finds
-`1.7.250401001`. An exact version still works too. If nothing matches, it tries
-your text as-is (and tells you if that fails).
+`wasdk: 1.7` is enough. It matches your text against the real version list by
+dotted segments and picks the newest one that fits, so `1.7` finds
+`1.7.250401001`. An exact version still works too - and if you write a full
+version, no version list is fetched at all, so a fully pinned repro runs offline.
+
+### Packaged mode needs Developer Mode
+
+`packaged: yes` (and `--packaged`) registers the provisioned runner folder as a
+loose-layout package. Windows only allows that when Developer Mode is on:
+**Settings > Privacy & security > For developers**. Without it you get
+`0x80073CFF`, and the console falls back to an unpackaged launch with a warning.
 
 ## Build it (without running)
 
@@ -129,31 +263,42 @@ dotnet build .\ReproStudio.slnx -c Debug
 
 # How it works
 
-Skip this unless you want the guts. Short version: it's two apps talking through
-a JSON file, and your C# gets compiled at runtime with Roslyn.
+Skip this unless you want the guts. Short version: it's two processes talking
+through a JSON file, and your C# gets compiled at runtime with Roslyn.
 
-## The two processes
+## The processes
 
 ```
-+-------------------+   request.json   +----------------------+
-|  ReproStudio.Host | ---------------> |  ReproStudio.Runner  |
-|  (the UI you use) |   (JSON on disk) |  (the preview window)|
-|  packaged, WinUI  | <--- launches -- |  unpackaged, WinUI   |
-+-------------------+                  +----------------------+
-         \                                      /
-          \________ ReproStudio.Shared ________/
-                   (the Snippet contract)
+ +---------------------+
+ |  ReproStudio.exe    |  console host, no WASDK
+ |  (or .Host.exe)     |  WinUI host, has WASDK
+ +---------------------+
+            |  request.json (JSON on disk)
+            v
+ +----------------------+
+ |  ReproStudio.Runner  |  the preview window
+ |  self-contained WASDK|  one per version
+ +----------------------+
+
+  both hosts sit on ReproStudio.Shared
+  (Snippet, RunnerHost, RunnerProvisioner, PackagedRunnerLauncher, AppLayout)
 ```
 
-- **Host** is the app you interact with. It's packaged (MSIX identity).
+- **Cli** is the console host. No WASDK reference at all.
+- **Host** is the WinUI GUI. Unpackaged and self-contained, same as the runner.
 - **Runner** is a separate, throwaway process that does the actual rendering.
   There's one Runner per WASDK version.
-- **Shared** is the tiny contract both sides agree on (the `Snippet` type plus
-  the read/write helpers).
+- **Shared** is everything both hosts need: the `Snippet` contract, the launcher,
+  the provisioner, and the file-layout rules.
 
-Why two processes? So we can render the same snippet against *different* WASDK
-versions side by side. Each version gets its own Runner exe with that version's
-runtime DLLs next to it. The Host just launches whichever one you asked for.
+Why separate processes? So we can render the same snippet against *different*
+WASDK versions. Each version gets its own Runner exe with that version's runtime
+DLLs next to it. The host just launches whichever one you asked for.
+
+Notably, `Shared` uses `Windows.Management.Deployment.PackageManager` to register
+the packaged runner. That comes from the Windows SDK projection (free with a
+`net10.0-windows` TFM) and needs **no** Windows App SDK, which is what lets the
+console host stay WASDK-free.
 
 ## Running different WASDK versions
 
@@ -163,8 +308,21 @@ Runner against WASDK 1.5, or 1.7, or 2.2, without rebuilding it each time.
 ### The base runner (built once)
 
 We build the Runner **once**, self-contained, against the latest WASDK. That
-build - the "base" - lives at `%LOCALAPPDATA%\winui-repro-app\runner-base`. It
-has three kinds of files:
+build - the "base" - is found in one of two places:
+
+| Deployment | Where the base comes from |
+|---|---|
+| Portable (xcopy bundle) | `runner-base\` next to the host exe |
+| Dev box | `%LOCALAPPDATA%\winui-repro-app\runner-base` |
+
+`pack.ps1` produces the first. For the second, build
+`src\ReproStudio.Runner` and copy its output there. `--doctor` tells you which one
+is in play.
+
+Either way, everything the tool *writes* goes to the cache root, so the bundle
+folder itself is read-only and can live on a share or a USB stick.
+
+The base has three kinds of files:
 
 - The app itself: `ReproStudio.Runner.exe`, its dll, its PRI, Roslyn, the .NET bits.
 - The **managed** WASDK projections: `Microsoft.WinUI.dll`,
@@ -175,13 +333,16 @@ has three kinds of files:
 > **Build the base with `dotnet build`, not `dotnet publish`.** Publish drops the
 > app resource index (`ReproStudio.Runner.pri`), and without it the runner crashes
 > at startup with *"Cannot locate resource ms-appx:///Microsoft.UI.Xaml/Themes/
-> themeresources.xaml"*. Copy the self-contained output of
-> `dotnet build .\src\ReproStudio.Runner -c Release -p:Platform=x64` into
-> `runner-base`.
+> themeresources.xaml"*.
+>
+> A stray **`resources.pri`** in the runner output causes the exact same crash,
+> because it shadows `ReproStudio.Runner.pri`. MSIX tooling has written one into
+> `bin` in the past and nothing cleans it up, so the runner's build deletes it
+> every time and `pack.ps1` refuses to ship one.
 
 ### Making a runner for version X
 
-When you pick version X, the Host provisions a folder for it (see
+When you pick version X, the host provisions a folder for it (see
 `RunnerProvisioner.EnsureRunnerAsync`):
 
 ```
@@ -196,6 +357,13 @@ When you pick version X, the Host provisions a folder for it (see
 4. Launch `versions\X\ReproStudio.Runner.exe`.
 
 The managed projections stay at the base version. Only the native DLLs change.
+
+A provisioned folder is reused as-is next time, *unless* the base runner has been
+rebuilt since. The provisioner compares the base's `ReproStudio.Runner.dll`
+timestamp against the copy, and re-provisions when they differ. Without that check
+a fix to the Runner would never reach versions provisioned earlier - they'd serve
+the old binary forever and the bug would look like it came back. Re-provisioning
+reuses the cached downloads, so it re-copies but doesn't re-download.
 
 ### Two package layouts (the 1.8 split)
 
@@ -237,6 +405,9 @@ find an *installed* WASDK framework and loads from there, ignoring what's next t
 the exe. We tried it - the runner just popped "This application could not be
 started". So the base has to be self-contained.
 
+Everything is also self-contained for **.NET**, for a different reason: so the
+target machine doesn't need a .NET runtime installed.
+
 ### Seeing which version really loaded
 
 The Runner window has a footer showing the version of the `Microsoft.ui.xaml.dll`
@@ -246,30 +417,50 @@ wrong number shows up right there.
 
 ### The cache
 
-Everything lives under `%LOCALAPPDATA%\winui-repro-app\`:
+Everything lives under `%LOCALAPPDATA%\winui-repro-app\`, or wherever
+`REPROSTUDIO_CACHE` points:
 
 | Folder | What |
 |---|---|
-| `runner-base\` | The self-contained base runner (built once, copied in by you). |
+| `runner-base\` | The self-contained base runner (dev boxes only; a bundle carries its own). |
 | `nupkgs\`      | Downloaded + extracted WASDK NuGet packages. |
 | `versions\`    | One assembled runner per version you've used. |
 | `local-winui\` | Extracted local WinUI `.nupkg` overrides. |
 
-The **Clear cache** button in the Host wipes `versions\` and `local-winui\` (it
-keeps `nupkgs\`, so re-provisioning is fast), then rebuilds the current version.
-Handy after you rebuild the base, or if a version folder ever gets wedged.
+`--clear-cache` (console) and the **Clear cache** button (GUI) wipe `versions\`
+and `local-winui\`, keeping `nupkgs\` so re-provisioning is fast. Handy after you
+rebuild the base, or if a version folder ever gets wedged.
+
+## Packaged mode
+
+Both hosts can give the runner real package identity, without any MSIX build step
+(see `PackagedRunnerLauncher`):
+
+1. Copy `RunnerIdentity\Package.appxmanifest` into the version folder as
+   `AppxManifest.xml`, along with its `Assets\`.
+2. `PackageManager.RegisterPackageAsync(uri, null, DeploymentOptions.DevelopmentMode)`
+   registers that folder **in place** - no staging copy of 150+ MB.
+3. Activate by AUMID through `IApplicationActivationManager`.
+
+There's no `makepri` step, and no `resources.pri`: the manifest uses literal
+strings and unqualified asset names, so there is no `ms-resource:` indirection to
+resolve. The manifest and `Assets\` are inert for a plain `CreateProcess`, so the
+same folder still works for an unpackaged launch while registered.
+
+This needs Developer Mode. Without it, registration fails with `0x80073CFF` and
+the host falls back to an unpackaged launch, saying so.
 
 ## The IPC: it's just a file
 
 No pipes, no sockets, no localhost server. The whole channel is one JSON file.
 
-1. The Host makes a temp folder like
+1. The host makes a temp folder like
    `%TEMP%\winui-repro-app\runner-<8 hex>\request.json` (see `RunnerHost.cs`).
-2. When you edit a snippet, the Host serializes it to that file. It writes to a
+2. When the snippet changes, the host serializes it to that file. It writes to a
    `.tmp-<guid>` file first, then renames it over the real one. Rename is atomic
    on the same drive, so the Runner never sees a half-written file
    (`SnippetIo.WriteAtomic`).
-3. The Host launches the Runner exe pointed at that file:
+3. The host launches the Runner exe pointed at that file:
    `ReproStudio.Runner.exe --request <path> --bounds <x y w h>`.
 4. The Runner puts a `FileSystemWatcher` on the file. On a change it waits 150ms
    (debounce, so a burst of saves collapses into one), then re-reads and
@@ -321,6 +512,10 @@ Any failure is tagged by phase (`xaml`, `csharp-compile`, or `runtime`) and show
 in an InfoBar instead of taking down the Runner. Compile errors even get their
 line numbers fixed up so they match your snippet, not the prepended usings.
 
+If the Runner dies before it can show anything, it writes the exception to
+`%TEMP%\winui-repro-app\runner.log`. The console host notices the process is gone
+and prints whatever was appended since it launched.
+
 ## Why the Runner has no XAML files
 
 The Runner is built entirely in code, no `App.xaml`, no `MainWindow.xaml`. That's
@@ -330,20 +525,22 @@ the exe. So `App.cs` and `MainWindow.cs` hand-write the few things the XAML
 compiler would normally generate (registering `XamlControlsResources`,
 implementing `IXamlMetadataProvider`).
 
-## How running works (the AUMID thing)
-
-The Host references `Microsoft.Windows.SDK.BuildTools.WinApp`. That package hooks
-`dotnet run` and, instead of launching the raw exe, hands off to the `winapp` CLI
-which registers a loose-layout package and launches the app with real package
-identity (via AUMID). That's why you see an AUMID and a PID printed instead of
-console output. To attach a debugger, attach to that PID.
-
 ## Gotchas
 
 - A running Runner **locks its own .exe**, so a rebuild can fail with a file-lock
-  error. Kill leftover `ReproStudio.Runner` processes first.
+  error. Kill leftover `ReproStudio.Runner` processes first. `pack.ps1` does this
+  for you.
 - Use `dotnet` (SDK 10.x), not VS2022's MSBuild. VS resolves an older SDK and
   chokes on net10 (NETSDK1045).
+- `Directory.Build.props` at the repo root is intentionally almost empty. It stops
+  MSBuild's upward search from finding a parent repo's props file that would
+  redirect `OutDir`. Don't delete it.
+- Self-contained builds put the output under a RID subfolder
+  (`bin\x64\Debug\<tfm>\win-x64\`). `pack.ps1` asks MSBuild for `OutDir` rather
+  than guessing.
+- Both hosts and the runner derive their `RuntimeIdentifier` from the *build*
+  machine's architecture. `pack.ps1` passes `-p:RuntimeIdentifier` explicitly so
+  cross-architecture packing is correct.
 - The provisioned runners and downloaded packages live under
   `%LOCALAPPDATA%\winui-repro-app\` (see the cache table above) and aren't in the
-  repo. Use the **Clear cache** button to wipe the provisioned versions.
+  repo.

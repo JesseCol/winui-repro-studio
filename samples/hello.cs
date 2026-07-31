@@ -9,7 +9,7 @@ class Repro
     const string Xaml = """
         <StackPanel xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                    Padding="24" Spacing="12">
+                    Padding="24" Spacing="12" Background="White">
             <TextBlock Text="Hello from a file!" FontSize="28" />
             <Button x:Name="HelloButton" Content="Click me" />
         </StackPanel>
@@ -20,6 +20,7 @@ class Repro
     static void Setup(FrameworkElement root, Window window)
     {
         window.Title = "Hello repro";
+        window.ExtendsContentIntoTitleBar = true;
         Log("Loaded from hello.cs.");
 
         if (root.FindName("HelloButton") is Button button)
