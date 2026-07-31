@@ -152,7 +152,16 @@ public sealed class RunnerProvisioner
         string exe = Path.Combine(dest, "ReproStudio.Runner.exe");
         if (File.Exists(exe))
         {
-            return exe;
+            if (!IsBaseRunnerNewer(baseRunnerDir, dest))
+            {
+                return exe;
+            }
+
+            // The runner was rebuilt after this folder was provisioned. Without this,
+            // a runner fix never reaches versions provisioned earlier - they keep
+            // serving the old binary forever, and the bug looks like it came back.
+            Report(progress, $"Base runner changed, re-provisioning {version}...");
+            DeleteWithRetry(dest);
         }
 
         string staging = dest + ".staging";
@@ -205,6 +214,27 @@ public sealed class RunnerProvisioner
         // Atomic-ish swap: stage fully, then move into place.
         MoveWithRetry(staging, dest);
         return exe;
+    }
+
+    /// <summary>
+    /// True when the base runner has been rebuilt since this version folder was
+    /// provisioned. File copies preserve last-write time, so a mismatch on the runner
+    /// assembly means the base moved on and this folder is serving a stale binary.
+    /// </summary>
+    private static bool IsBaseRunnerNewer(string baseRunnerDir, string dest)
+    {
+        const string marker = "ReproStudio.Runner.dll";
+        string baseDll = Path.Combine(baseRunnerDir, marker);
+        string copiedDll = Path.Combine(dest, marker);
+
+        if (!File.Exists(baseDll))
+        {
+            // No base to compare against, so keep whatever is already provisioned.
+            return false;
+        }
+
+        return !File.Exists(copiedDll)
+            || File.GetLastWriteTimeUtc(baseDll) != File.GetLastWriteTimeUtc(copiedDll);
     }
 
     private async Task ApplyWinUiOverrideAsync(
