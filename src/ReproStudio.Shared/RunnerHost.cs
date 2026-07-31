@@ -5,9 +5,8 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
-using ReproStudio.Shared;
 
-namespace ReproStudio_Host.Services;
+namespace ReproStudio.Shared;
 
 /// <summary>
 /// Owns the request file and the runner process. The host writes snippets to the

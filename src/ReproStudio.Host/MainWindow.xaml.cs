@@ -1,5 +1,7 @@
 using System.Runtime.InteropServices;
+using Microsoft.UI.Composition.SystemBackdrops;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Media;
 using Windows.Graphics;
 
 // To learn more about WinUI, the WinUI project structure,
@@ -27,6 +29,8 @@ public sealed partial class MainWindow : Window
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
 
+        ApplyBestBackdrop();
+
         AppWindow.SetIcon("Assets/AppIcon.ico");
         ResizeToInitialSize();
 
@@ -41,6 +45,29 @@ public sealed partial class MainWindow : Window
 
     [DllImport("user32.dll")]
     private static extern uint GetDpiForWindow(nint hwnd);
+
+    /// <summary>
+    /// Picks the best backdrop the OS actually supports. This tool runs down to Windows 10
+    /// 1809 to chase downlevel bugs, and Mica is Windows 11 only, so the backdrop cannot be
+    /// hardcoded in XAML. Falling all the way through leaves no backdrop at all, in which
+    /// case the root grid needs an opaque background of its own - the title bar is extended
+    /// into the client area, so an unpainted window would show through.
+    /// </summary>
+    private void ApplyBestBackdrop()
+    {
+        if (MicaController.IsSupported())
+        {
+            SystemBackdrop = new MicaBackdrop();
+        }
+        else if (DesktopAcrylicController.IsSupported())
+        {
+            SystemBackdrop = new DesktopAcrylicBackdrop();
+        }
+        else
+        {
+            RootGrid.Background = (Brush)Application.Current.Resources["ApplicationPageBackgroundThemeBrush"];
+        }
+    }
 
     /// <summary>Sizes the window to its initial size, scaled for the current DPI.</summary>
     private void ResizeToInitialSize()

@@ -1,10 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
 
-namespace ReproStudio_Host.Services;
+namespace ReproStudio.Shared;
 
 /// <summary>
 /// The parsed pieces of a single-file repro (a <c>.cs</c> file an external editor
@@ -26,11 +27,26 @@ public sealed class ParsedSnippetFile
     /// </summary>
     public string? WinUiToken { get; init; }
 
+    /// <summary>
+    /// Launch-time: whether to give the runner package identity (<c>// packaged:</c>).
+    /// Null when the header does not say, so a command-line default can win.
+    /// </summary>
+    public bool? Packaged { get; init; }
+
+    /// <summary>Launch-time process DPI for the runner (<c>// dpi:</c>), or null.</summary>
+    public int? Dpi { get; init; }
+
     /// <summary>Live theme: Default | Light | Dark.</summary>
     public string Theme { get; init; } = "Default";
 
     /// <summary>Live flow direction: LeftToRight | RightToLeft.</summary>
     public string FlowDirection { get; init; } = "LeftToRight";
+
+    /// <summary>Live stage background from <c>// background:</c>, e.g. "#202020".</summary>
+    public string? Background { get; init; }
+
+    /// <summary>Live: keep the runner window above other windows (<c>// topmost:</c>).</summary>
+    public bool Topmost { get; init; }
 
     /// <summary>The XAML pulled from the file's <c>string Xaml</c> literal.</summary>
     public string Xaml { get; init; } = string.Empty;
@@ -55,7 +71,8 @@ public static class SnippetFileParser
 
     private static readonly HashSet<string> KnownKeys = new(StringComparer.OrdinalIgnoreCase)
     {
-        "repro", "title", "wasdk", "winui", "theme", "flow",
+        "repro", "title", "wasdk", "winui", "packaged", "dpi",
+        "theme", "flow", "background", "topmost",
     };
 
     /// <summary>Parses the file text into its header + XAML + C# parts.</summary>
@@ -74,8 +91,12 @@ public static class SnippetFileParser
             Title = title,
             WasdkVersion = Get(header, "wasdk"),
             WinUiToken = winuiToken,
+            Packaged = ParseBool(Get(header, "packaged")),
+            Dpi = ParseDpi(Get(header, "dpi")),
             Theme = NormalizeTheme(Get(header, "theme")),
             FlowDirection = NormalizeFlow(Get(header, "flow")),
+            Background = Get(header, "background"),
+            Topmost = ParseBool(Get(header, "topmost")) ?? false,
             Xaml = xaml,
             CSharp = fileText,
             HasXaml = hasXaml,
@@ -133,6 +154,24 @@ public static class SnippetFileParser
         "dark" => "Dark",
         _ => "Default",
     };
+
+    /// <summary>
+    /// Reads a yes/no header value. Returns null when the key is absent, so a caller can
+    /// tell "the file did not say" from "the file said no" and let a command-line flag win.
+    /// </summary>
+    private static bool? ParseBool(string? value) => value?.Trim().ToLowerInvariant() switch
+    {
+        "true" or "yes" or "on" or "1" => true,
+        "false" or "no" or "off" or "0" => false,
+        _ => null,
+    };
+
+    /// <summary>Reads a DPI value, ignoring anything outside the range the runner accepts.</summary>
+    private static int? ParseDpi(string? value) =>
+        int.TryParse(value?.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int dpi)
+        && dpi is >= 100 and <= 400
+            ? dpi
+            : null;
 
     private static string NormalizeFlow(string? value)
     {

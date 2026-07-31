@@ -24,9 +24,14 @@
       (dropping a different version's DLLs next to the exe would be ignored). The
       host provisioner overlays each target version's native DLLs (native only, so
       the compiled-in managed assemblies keep matching) onto a fresh copy of the base.
+
+      SelfContained applies the same idea to .NET itself, so the runner also carries
+      its own runtime. Without it the target machine would need a matching .NET
+      runtime installed, which would break xcopy deployment.
     -->
     <WindowsPackageType>None</WindowsPackageType>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <SelfContained>true</SelfContained>
     <EnableMsixTooling>false</EnableMsixTooling>
 
     <!-- WASDK version is overridable so the host can publish a runner per version. -->
@@ -42,5 +47,23 @@
   <ItemGroup>
     <ProjectReference Include="..\ReproStudio.Shared\ReproStudio.Shared.csproj" />
   </ItemGroup>
+
+  <!--
+    Delete any resources.pri left in the output.
+
+    WinUI resolves ms-appx resources through resources.pri when that file exists, and
+    otherwise through <AssemblyName>.pri. This project only ever produces the latter,
+    which is the one that actually contains themeresources.xaml. A resources.pri here
+    is always stale - MSIX tooling wrote one into bin at some point in the past and
+    nothing cleans it up - and because it wins, the runner dies at startup with
+    "Cannot locate resource from 'ms-appx:///Microsoft.UI.Xaml/Themes/themeresources.xaml'".
+
+    That is an easy mistake to re-make, because it survives a rebuild and travels into
+    runner-base and every provisioned version folder copied from it. So remove it on
+    every build rather than relying on anyone remembering to clean.
+  -->
+  <Target Name="RemoveStaleResourcesPri" AfterTargets="Build">
+    <Delete Files="$(OutDir)resources.pri" ContinueOnError="true" />
+  </Target>
 
 </Project>

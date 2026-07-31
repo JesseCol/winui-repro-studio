@@ -8,7 +8,6 @@ using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Microsoft.UI.Dispatching;
 using ReproStudio.Shared;
-using ReproStudio_Host.Services;
 
 namespace ReproStudio_Host.ViewModels;
 
@@ -59,7 +58,7 @@ public partial class MainViewModel : ObservableObject
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromMinutes(5) };
     private readonly RunnerProvisioner _provisioner;
     private readonly PackagedRunnerLauncher _packagedLauncher;
-    private readonly string _baseRunnerDir;
+    private readonly AppLayout _layout;
     private readonly IProgress<ProvisionProgress> _provisionProgress;
 
     private FileSystemWatcher? _fileWatcher;
@@ -115,12 +114,12 @@ public partial class MainViewModel : ObservableObject
 
         _dispatcherQueue = dispatcherQueue;
 
-        string cacheRoot = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "winui-repro-app");
-        _baseRunnerDir = Path.Combine(cacheRoot, "runner-base");
-        _provisioner = new RunnerProvisioner(_http, cacheRoot);
-        _packagedLauncher = new PackagedRunnerLauncher(cacheRoot);
+        // Prefers a runner-base shipped next to the exe (xcopy bundle) and falls back to
+        // the developer one under %LOCALAPPDATA%. Writes always go to the cache root.
+        AppLayout layout = AppLayout.Resolve();
+        _layout = layout;
+        _provisioner = new RunnerProvisioner(_http, layout.CacheRoot);
+        _packagedLauncher = new PackagedRunnerLauncher();
         _runner = new RunnerHost(_packagedLauncher);
         _provisionProgress = new Progress<ProvisionProgress>(p => StatusText = p.Message);
 
@@ -148,10 +147,9 @@ public partial class MainViewModel : ObservableObject
     {
         Push();
 
-        if (!Directory.Exists(_baseRunnerDir))
+        if (!_layout.HasBaseRunner)
         {
-            StatusText = "Base runner missing. Build it once and copy its output to "
-                + "%LOCALAPPDATA%\\winui-repro-app\\runner-base.";
+            StatusText = _layout.DescribeMissingBaseRunner();
             return;
         }
 
@@ -519,49 +517,10 @@ public partial class MainViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Resolves a possibly-partial WASDK token to a full version. An exact match
-    /// wins; otherwise the newest version whose dotted segments start with the token
-    /// (so "1.7" finds "1.7.250401001"). Falls back to the token as typed.
+    /// Resolves a possibly-partial WASDK token against the versions we listed.
+    /// See <see cref="VersionResolver"/>.
     /// </summary>
-    private string ResolveVersionToken(string token)
-    {
-        if (Versions.Contains(token))
-        {
-            return token;
-        }
-
-        string[] wanted = token.Split('.', StringSplitOptions.RemoveEmptyEntries);
-        if (wanted.Length == 0)
-        {
-            return token;
-        }
-
-        foreach (string candidate in Versions)
-        {
-            string[] parts = candidate.Split('.');
-            if (wanted.Length > parts.Length)
-            {
-                continue;
-            }
-
-            bool match = true;
-            for (int i = 0; i < wanted.Length; i++)
-            {
-                if (!string.Equals(parts[i], wanted[i], StringComparison.Ordinal))
-                {
-                    match = false;
-                    break;
-                }
-            }
-
-            if (match)
-            {
-                return candidate;
-            }
-        }
-
-        return token;
-    }
+    private string ResolveVersionToken(string token) => VersionResolver.Resolve(token, Versions);
 
     private void ApplyLaunchSelection(string version, string? winuiToken)
     {
@@ -790,7 +749,7 @@ public partial class MainViewModel : ObservableObject
                 {
                     StatusText = $"Preparing Windows App SDK {version}...";
                     string exe = await Task.Run(() =>
-                        _provisioner.EnsureRunnerAsync(version, _baseRunnerDir, winui, _provisionProgress));
+                        _provisioner.EnsureRunnerAsync(version, _layout.BaseRunnerDir, winui, _provisionProgress));
 
                     _currentExe = exe;
                     string winuiSuffix = winui is null ? string.Empty : $" + WinUI {winuiOption!.Display}";
