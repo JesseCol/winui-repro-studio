@@ -28,6 +28,7 @@ class Repro
         public int BottomHeight;
     }
 
+
     [DllImport("dwmapi.dll")]
     private static extern int DwmExtendFrameIntoClientArea(IntPtr hwnd, ref Margins margins);
 
@@ -39,15 +40,19 @@ class Repro
         // The one WinUI-specific step: turn the Window into an HWND.
         IntPtr hwnd = WindowNative.GetWindowHandle(window);
 
+        int m = 0;
+
         // -1 on all four sides is the "sheet of glass" extend: the frame covers
         // the whole client area.
         var margins = new Margins
         {
-            LeftWidth = -1,
-            RightWidth = -1,
-            TopHeight = -1,
-            BottomHeight = -1,
+            LeftWidth = m,
+            RightWidth = m,
+            TopHeight = m,
+            BottomHeight = m,
         };
+
+        window.ExtendsContentIntoTitleBar = true;
 
         int hr = DwmExtendFrameIntoClientArea(hwnd, ref margins);
 
