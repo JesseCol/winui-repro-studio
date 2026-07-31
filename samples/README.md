@@ -16,6 +16,7 @@ watched, so every save refreshes the runner.
 | [hello.cs](hello.cs) | The basics: a header, XAML in a raw-string, a button wired up in `Setup`. |
 | [counter.cs](counter.cs) | C# driving the XAML (a click counter), plus `theme: Dark`. |
 | [full-header.cs](full-header.cs) | Every header key, annotated. Good starting point for a new repro. |
+| [pinvoke.cs](pinvoke.cs) | Your own `using` directives and `[DllImport]`. Gets the HWND and calls into `dwmapi`. |
 
 ## The format, in one breath
 

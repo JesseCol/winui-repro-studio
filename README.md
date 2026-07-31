@@ -251,6 +251,52 @@ loose-layout package. Windows only allows that when Developer Mode is on:
 **Settings > Privacy & security > For developers**. Without it you get
 `0x80073CFF`, and the console falls back to an unpackaged launch with a warning.
 
+### Your own usings, and P/Invoke
+
+The runner hands your whole file to Roslyn after prepending a fixed block of
+usings, so you can add your own directives and they land in the right place.
+Repeating one that's already injected is a warning, not an error, so
+`using System;` at the top of your repro is fine.
+
+Injected for free:
+
+```
+System                                 Microsoft.UI.Xaml.Media
+Microsoft.UI.Xaml                      Microsoft.UI.Xaml.Shapes
+Microsoft.UI.Xaml.Controls             Microsoft.UI.Xaml.Input
+Microsoft.UI.Xaml.Controls.Primitives  Microsoft.UI.Windowing
+Windows.Graphics                       static ReproStudio_Runner.ReproApi
+```
+
+That means `[DllImport]` works, which is how you repro anything that needs Win32.
+Take the `Window` that `Setup` hands you and turn it into an HWND:
+
+```csharp
+using System.Runtime.InteropServices;
+using WinRT.Interop;
+
+class Repro
+{
+    const string Xaml = """<TextBlock xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Text="hi" />""";
+
+    [DllImport("user32.dll")]
+    private static extern int GetWindowLong(IntPtr hwnd, int index);
+
+    static void Setup(FrameworkElement root, Window window)
+    {
+        IntPtr hwnd = WindowNative.GetWindowHandle(window);
+        Log($"ex-style 0x{GetWindowLong(hwnd, -20):X8}");
+    }
+}
+```
+
+A fuller example, calling `DwmExtendFrameIntoClientArea`, is in
+[`samples/pinvoke.cs`](samples/pinvoke.cs).
+
+One limit worth knowing: the runner paints its own opaque stage over the client
+area, so Win32 calls that rely on client-area transparency (DWM glass, layered
+windows) will return `S_OK` and change nothing you can see.
+
 ## Build it (without running)
 
 Everything is x64. Build the whole solution with:
