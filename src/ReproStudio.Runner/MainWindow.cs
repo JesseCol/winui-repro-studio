@@ -29,6 +29,7 @@ public sealed class MainWindow : Window
     private readonly InfoBar _errorBar;
     private FileSystemWatcher? _watcher;
     private bool _topmost;
+    private bool _closed;
 
     public MainWindow(string? requestPath, RunnerBounds? bounds)
     {
@@ -81,6 +82,7 @@ public sealed class MainWindow : Window
         ReproApi.LogSink = AppendLog;
         Closed += (s, e) =>
         {
+            _closed = true;
             _watcher?.Dispose();
             ReproApi.LogSink = null;
         };
@@ -88,7 +90,7 @@ public sealed class MainWindow : Window
         // Setting IsAlwaysOnTop before the window is shown doesn't stick, so re-apply
         // it whenever the window activates - this is what makes a freshly launched
         // runner honor a persisted "keep on top" choice.
-        Activated += (s, e) => ApplyTopmost();
+        Activated += OnActivated;
 
         if (string.IsNullOrEmpty(_requestPath))
         {
@@ -297,11 +299,35 @@ public sealed class MainWindow : Window
         ApplyTopmost();
     }
 
+    private void OnActivated(object sender, WindowActivatedEventArgs e)
+    {
+        // Activated also fires when the window *de*activates, including the deactivation
+        // that happens while it is being torn down. Only re-apply on the way in.
+        if (e.WindowActivationState != WindowActivationState.Deactivated)
+        {
+            ApplyTopmost();
+        }
+    }
+
     private void ApplyTopmost()
     {
-        if (AppWindow.Presenter is OverlappedPresenter presenter)
+        if (_closed)
         {
-            presenter.IsAlwaysOnTop = _topmost;
+            return;
+        }
+
+        try
+        {
+            if (AppWindow.Presenter is OverlappedPresenter presenter)
+            {
+                presenter.IsAlwaysOnTop = _topmost;
+            }
+        }
+        catch (Exception ex)
+        {
+            // Keep-on-top is cosmetic, and the presenter can go invalid underneath us
+            // during teardown. The runner exists to survive bad states, so log and live.
+            CrashLog.Log("ApplyTopmost failed (ignored): " + ex.Message);
         }
     }
 
