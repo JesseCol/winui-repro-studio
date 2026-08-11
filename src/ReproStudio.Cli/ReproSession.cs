@@ -30,7 +30,6 @@ internal sealed class ReproSession : IDisposable
     private readonly AppLayout _layout;
     private readonly string _filePath;
 
-    private readonly HttpClient _http;
     private readonly RunnerProvisioner _provisioner;
     private readonly RunnerHost _host;
 
@@ -66,17 +65,20 @@ internal sealed class ReproSession : IDisposable
         _layout = layout;
         _filePath = Path.GetFullPath(options.File!);
 
-        // Generous timeout: a cold cache downloads tens of megabytes of NuGet packages,
-        // and the default 100 seconds is not enough on a slow or throttled link.
-        _http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
-        _provisioner = new RunnerProvisioner(_http, layout.CacheRoot);
+        // A nuget.config next to the repro file is honoured, so a repro can travel with
+        // the feed it needs (an internal WinUI feed, say).
+        _provisioner = new RunnerProvisioner(layout.CacheRoot, Path.GetDirectoryName(_filePath));
         _host = new RunnerHost(new PackagedRunnerLauncher());
     }
 
-    /// <summary>Everything that forces a new runner process when it changes.</summary>
-    private readonly record struct LaunchPlan(string Version, string WinUiKey, string PayloadKey, bool Packaged, int Dpi)
+    /// <summary>
+    /// Everything that forces a new runner process when it changes. <see cref="Version"/> is
+    /// null when a WinUI package is standing on its own: the package's declared dependencies
+    /// pick the stack, so there is no Windows App SDK version to name.
+    /// </summary>
+    private readonly record struct LaunchPlan(string? Version, string WinUiKey, string PayloadKey, bool Packaged, int Dpi)
     {
-        public string Describe() => Version
+        public string Describe() => (Version ?? "winui-only")
             + (WinUiKey.Length == 0 ? string.Empty : " + winui " + WinUiKey)
             + (PayloadKey.Length == 0 ? string.Empty : " + payload " + PayloadKey)
             + (Packaged ? " (packaged)" : string.Empty);
@@ -149,7 +151,7 @@ internal sealed class ReproSession : IDisposable
             _host.Dispose();
         }
 
-        _http.Dispose();
+        _provisioner.Dispose();
     }
 
     /// <summary>
@@ -179,7 +181,7 @@ internal sealed class ReproSession : IDisposable
         {
             winui = ResolveWinUi(parsed.WinUiToken);
             payload = ResolvePayload(parsed.PayloadDir);
-            string version = await ResolveVersionAsync(parsed.WasdkVersion).ConfigureAwait(false);
+            string? version = await ResolveVersionAsync(parsed.WasdkVersion, winui).ConfigureAwait(false);
             plan = new LaunchPlan(
                 version,
                 winui?.CacheKey ?? string.Empty,
@@ -215,10 +217,18 @@ internal sealed class ReproSession : IDisposable
         if (firstRun)
         {
             Log.Step("provision");
-            Log.Field("wasdk", plan.Version);
+            if (plan.Version is not null)
+            {
+                Log.Field("wasdk", plan.Version);
+            }
+
             if (winui is not null)
             {
                 Log.Field("winui", winui.LocalNupkgPath ?? winui.NuGetVersion ?? "default");
+                if (plan.Version is null)
+                {
+                    Log.Detail("No Windows App SDK version asked for, so this package's own dependencies pick the stack.");
+                }
             }
 
             if (payload is not null)
@@ -247,8 +257,11 @@ internal sealed class ReproSession : IDisposable
         }
         catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidOperationException or UnauthorizedAccessException)
         {
-            Log.Error("Could not prepare a runner for " + plan.Version + ": " + ex.Message);
-            Log.Detail("Run with --list to see the versions NuGet actually has.");
+            Log.Error("Could not prepare a runner for " + plan.Describe() + ": " + ex.Message);
+            if (ex.Message.Contains("not found on any package source", StringComparison.Ordinal))
+            {
+                Log.Detail("Run with --list to see the versions NuGet actually has.");
+            }
             return false;
         }
 
@@ -318,10 +331,19 @@ internal sealed class ReproSession : IDisposable
     /// Turns a version token into a real version. A fully written version is used as-is so
     /// a pinned repro file works with no network at all; anything shorter (or missing) needs
     /// the list from NuGet.
+    ///
+    /// Returns null when a WinUI package was given and no Windows App SDK version was asked
+    /// for. That package's own dependencies then decide the whole stack, which is what you
+    /// want for a nupkg out of the WinUI repo's 'build.cmd /version'.
     /// </summary>
-    private async Task<string> ResolveVersionAsync(string? headerToken)
+    private async Task<string?> ResolveVersionAsync(string? headerToken, WinUiOverride? winui)
     {
         string? token = _options.Wasdk ?? headerToken;
+
+        if (token is not { Length: > 0 } && winui is not null)
+        {
+            return null;
+        }
 
         if (token is { Length: > 0 } && token.Count(c => c == '.') >= 2)
         {

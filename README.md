@@ -196,15 +196,105 @@ you want to be sure the harness itself was working.
 
 Both put private bits in front of the runner. They solve different problems.
 
-| | `--payload <dir>` | `--winui <path.nupkg>` |
+| | `--payload <dir>` | `--winui <ver\|path.nupkg>` |
 |---|---|---|
-| Input | Loose files | A built `.nupkg` |
+| Input | Loose files | A version, or a built `.nupkg` |
 | Best for | One rebuilt DLL, iterating fast | A full WinUI build you want to keep and share |
-| Setup | Copy a file in | Pack a nupkg first (`tools\pack-local-winui.ps1`) |
+| Setup | Copy a file in | Build a nupkg first |
 | Granularity | Any file, any subfolder | The WinUI component |
+| Knows what stack it needs | No | Yes, if the nupkg declares dependencies |
 
 For a tight edit-build-test loop, use `--payload`. To hand someone a bundle that
-runs a specific build, use `--winui` and `pack.ps1 -LocalWinUi`.
+runs a specific build, use `--winui`.
+
+## Test a WinUI repo build
+
+This is the path to use for a real WinUI build. In the WinUI repo:
+
+```
+build.cmd /version 3.9.9-mybuild
+```
+
+That produces a `Microsoft.WindowsAppSDK.WinUI.3.9.9-mybuild.nupkg` that declares
+the Base, Foundation and InteractiveExperiences versions it was compiled against.
+Point ReproStudio at it and it works out the rest:
+
+```powershell
+ReproStudio.exe bug.cs --winui D:\winui\...\Microsoft.WindowsAppSDK.WinUI.3.9.9-mybuild.nupkg
+```
+
+```
+> provision
+  winui     Microsoft.WindowsAppSDK.WinUI.3.9.9-mybuild.nupkg
+  . No Windows App SDK version asked for, so this package's own dependencies pick the stack.
+  . Resolving components from the WinUI package...
+  . Fetching Microsoft.WindowsAppSDK.Base 2.0.4...
+  . Fetching Microsoft.WindowsAppSDK.Foundation 2.3.5...
+  . Fetching Microsoft.WindowsAppSDK.InteractiveExperiences 2.1.3...
+  . Applying local WinUI package ...
+```
+
+No `--wasdk` needed. The package is self-describing, so the versions it gets are
+the versions it was built against.
+
+### Why this matters
+
+A WinUI build compiled against Foundation 3.0.0 will happily load on a WASDK
+2.3.1 runner, which ships Foundation 2.3.5. Nothing complains at provision time.
+The mismatch surfaces much later as an unexplained `E_NOINTERFACE` or an
+`InvalidCastException`, and you lose a day to it. Letting the package pick its own
+stack removes the guess.
+
+### Mixing both flags
+
+Pass `--wasdk` too and you get a middle ground:
+
+```powershell
+ReproStudio.exe bug.cs --wasdk 2.2.0 --winui 2.3.0
+```
+
+The WASDK version supplies everything (AI, ML, Widgets, DWrite and the rest), and
+the WinUI package raises anything below what it needs:
+
+```
+  . WinUI 2.3.0 needs Microsoft.WindowsAppSDK.Foundation 2.3.5, but this Windows
+    App SDK provides 2.1.0. Raising it.
+  . WinUI 2.3.0 needs Microsoft.WindowsAppSDK.InteractiveExperiences 2.1.3, but
+    this Windows App SDK provides 2.0.15. Raising it.
+```
+
+Versions are floors, not pins. Stock combinations already "disagree" numerically
+(WASDK 2.3.1 ships Foundation 2.3.5 while its WinUI asks for `>= 2.3.1`), so
+anything higher is fine and only lower gets raised.
+
+### Packages with no dependency metadata
+
+`tools\pack-local-winui.ps1` produces a shape-only nupkg. It has the right folder
+layout but no nuspec, so it cannot decide a stack:
+
+```
+x Could not prepare a runner: ...nupkg declares no Windows App SDK dependencies,
+  so it cannot decide the stack on its own. Pass a Windows App SDK version as
+  well, or build the package with the WinUI repo's 'build.cmd /version <version>'.
+```
+
+Add `--wasdk <version>` and it works as a plain overlay, exactly like `--payload`.
+
+### NuGet sources
+
+ReproStudio uses your real NuGet configuration, so an internal feed just works.
+Drop a `nuget.config` next to the repro file to add one for a single repro:
+
+```xml
+<configuration>
+  <packageSources>
+    <add key="winui-pr" value="https://pkgs.dev.azure.com/.../nuget/v3/index.json" />
+  </packageSources>
+</configuration>
+```
+
+`--doctor` lists the sources it found. If a version cannot be fetched, the error
+names the package, the version, and every source it tried.
 
 ## Run the WinUI host
 

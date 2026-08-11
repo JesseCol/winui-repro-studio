@@ -55,7 +55,6 @@ public partial class MainViewModel : ObservableObject
     private readonly DispatcherQueue _dispatcherQueue;
     private readonly DispatcherQueueTimer _debounceTimer;
     private readonly DispatcherQueueTimer _fileDebounceTimer;
-    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromMinutes(5) };
     private readonly RunnerProvisioner _provisioner;
     private readonly PackagedRunnerLauncher _packagedLauncher;
     private readonly AppLayout _layout;
@@ -118,7 +117,7 @@ public partial class MainViewModel : ObservableObject
         // the developer one under %LOCALAPPDATA%. Writes always go to the cache root.
         AppLayout layout = AppLayout.Resolve();
         _layout = layout;
-        _provisioner = new RunnerProvisioner(_http, layout.CacheRoot);
+        _provisioner = new RunnerProvisioner(layout.CacheRoot);
         _packagedLauncher = new PackagedRunnerLauncher();
         _runner = new RunnerHost(_packagedLauncher);
         _provisionProgress = new Progress<ProvisionProgress>(p => StatusText = p.Message);

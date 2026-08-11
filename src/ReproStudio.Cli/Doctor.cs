@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Runtime.InteropServices;
 using Microsoft.Win32;
+using NuGet.Versioning;
 using ReproStudio.Shared;
 
 namespace ReproStudio_Cli;
@@ -32,12 +33,8 @@ internal static class Doctor
     /// </summary>
     private const long BytesPerVersion = 350L * 1024 * 1024;
 
-    /// <summary>What the runner is provisioned from. Probed to prove the network works.</summary>
-    private const string NuGetProbeUrl =
-        "https://api.nuget.org/v3-flatcontainer/microsoft.windowsappsdk/index.json";
-
     /// <summary>How long to wait on the NuGet probe before calling it unreachable.</summary>
-    private static readonly TimeSpan NetworkTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan NetworkTimeout = TimeSpan.FromSeconds(20);
 
     public static async Task<int> ReportAsync(AppLayout layout, CancellationToken ct)
     {
@@ -278,31 +275,44 @@ internal static class Doctor
     /// stops you trying a new version. It is only a warning: versions already on disk still
     /// work, and a repro that pins a full version never needs the network at all.
     /// </summary>
+    /// <summary>
+    /// Checks NuGet the way provisioning does: through the configured sources, asking a
+    /// real question. A hardcoded probe of nuget.org proves nothing on a machine whose
+    /// nuget.config replaces the public feed, which is common inside Microsoft.
+    /// </summary>
     private static async Task ReportNetworkAsync(Findings findings, CancellationToken ct)
     {
-        Log.Field("source", "api.nuget.org");
+        using var feed = new NuGetFeed();
+
+        foreach (string source in feed.Sources)
+        {
+            Log.Field("source", source);
+        }
 
         try
         {
-            using var http = new HttpClient { Timeout = NetworkTimeout };
-            using HttpResponseMessage response = await http
-                .GetAsync(NuGetProbeUrl, HttpCompletionOption.ResponseHeadersRead, ct)
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(NetworkTimeout);
+
+            IReadOnlyList<NuGetVersion> versions = await feed
+                .ListVersionsAsync("Microsoft.WindowsAppSDK", includePrerelease: false, timeout.Token)
                 .ConfigureAwait(false);
 
-            if (response.IsSuccessStatusCode)
+            if (versions.Count > 0)
             {
-                Log.Ok("NuGet is reachable");
+                Log.Ok($"NuGet answered, {versions.Count} Windows App SDK versions available");
                 return;
             }
 
-            findings.Warn("NuGet answered with " + (int)response.StatusCode + " " + response.ReasonPhrase
-                + ". Versions already provisioned still work; new ones cannot be downloaded.");
+            findings.Warn("No Windows App SDK versions came back from any source. Versions already "
+                + "provisioned still work; new ones cannot be downloaded. Check that a source "
+                + "carrying Microsoft.WindowsAppSDK is enabled.");
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             throw;
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException)
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException or InvalidOperationException)
         {
             findings.Warn("Could not reach NuGet (" + ex.Message.TrimEnd('.') + "). Versions already "
                 + "provisioned still work, and a repro that pins a full version is fine offline, but "

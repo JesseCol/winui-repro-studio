@@ -1,7 +1,7 @@
-using System.Net.Http;
-using System.Text.Json;
-using System.Xml.Linq;
 using System.IO.Compression;
+using NuGet.Packaging;
+using NuGet.Packaging.Core;
+using NuGet.Versioning;
 
 namespace ReproStudio.Shared;
 
@@ -19,11 +19,11 @@ public sealed class ProvisionProgress
 /// copies that version's loose runtime files (downloaded from NuGet and unzipped)
 /// over a copy of the base. Switching versions is just files on disk - no MSBuild.
 /// </summary>
-public sealed class RunnerProvisioner
+public sealed class RunnerProvisioner : IDisposable
 {
-    private const string FlatContainer = "https://api.nuget.org/v3-flatcontainer/";
     private const string MetapackageId = "Microsoft.WindowsAppSDK";
-    private const string WinUiComponentId = "Microsoft.WindowsAppSDK.WinUI";
+    private const string ComponentPrefix = MetapackageId + ".";
+    private const string WinUiComponentId = MetapackageId + ".WinUI";
     private const string RuntimeIdentifier = "win-x64";
 
     /// <summary>
@@ -38,19 +38,29 @@ public sealed class RunnerProvisioner
         "[Content_Types].xml",
     };
 
-    private readonly HttpClient _http;
+    private readonly NuGetFeed _feed;
     private readonly string _nupkgCache;
     private readonly string _versionsRoot;
     private readonly string _localCache;
 
-    public RunnerProvisioner(HttpClient http, string cacheRoot)
+    /// <param name="cacheRoot">Where downloaded packages and provisioned runners live.</param>
+    /// <param name="settingsRoot">
+    /// Directory to start the nuget.config search from, usually the folder holding the
+    /// repro file. Lets a repro sit next to a nuget.config naming the feed it needs.
+    /// </param>
+    public RunnerProvisioner(string cacheRoot, string? settingsRoot = null)
     {
-        _http = http ?? throw new ArgumentNullException(nameof(http));
         ArgumentNullException.ThrowIfNull(cacheRoot);
+        _feed = new NuGetFeed(settingsRoot);
         _nupkgCache = Path.Combine(cacheRoot, "nupkgs");
         _versionsRoot = Path.Combine(cacheRoot, "versions");
         _localCache = Path.Combine(cacheRoot, "local-winui");
     }
+
+    /// <summary>Package sources in use, for logs and diagnostics.</summary>
+    public IReadOnlyList<string> Sources => _feed.Sources;
+
+    public void Dispose() => _feed.Dispose();
 
     /// <summary>
     /// Windows App SDK versions from NuGet, newest first. Prerelease versions
@@ -76,18 +86,9 @@ public sealed class RunnerProvisioner
         bool includePrerelease,
         CancellationToken ct)
     {
-        string url = FlatContainer + id.ToLowerInvariant() + "/index.json";
-        await using Stream stream = await _http.GetStreamAsync(url, ct);
-        FlatIndex? index = await JsonSerializer.DeserializeAsync<FlatIndex>(stream, cancellationToken: ct);
-
-        // A '-' marks a SemVer prerelease label (e.g. "1.8.0-experimental1").
-        var versions = (index?.Versions ?? new List<string>())
-            .Where(v => includePrerelease || !v.Contains('-', StringComparison.Ordinal))
-            .Select(NuGetVersion.Parse)
-            .OrderByDescending(v => v)
-            .Select(v => v.Original)
-            .ToList();
-        return versions;
+        IReadOnlyList<NuGetVersion> versions =
+            await _feed.ListVersionsAsync(id, includePrerelease, ct).ConfigureAwait(false);
+        return versions.Select(v => v.ToNormalizedString()).ToList();
     }
 
     /// <summary>Path to the request file the host writes for the runner to watch.</summary>
@@ -132,25 +133,41 @@ public sealed class RunnerProvisioner
     }
 
     /// <summary>
-    /// Makes sure a runner for the version is on disk and returns the exe path.
-    /// Copies the base runner, then overlays the version's WASDK runtime files. An
-    /// optional <paramref name="winui"/> override swaps just the WinUI component for
-    /// a different NuGet version or a local .nupkg, leaving the rest of WASDK alone.
+    /// Makes sure a runner is on disk and returns the exe path. Copies the base runner,
+    /// then overlays runtime files.
+    ///
+    /// Give <paramref name="version"/> for a stock Windows App SDK version. Give
+    /// <paramref name="winui"/> to swap the WinUI component for a different NuGet version
+    /// or a local .nupkg. Give both and the Windows App SDK version supplies the
+    /// components WinUI does not need (AI, ML, Widgets, DWrite) while the WinUI package
+    /// wins on anything it does declare. Give only <paramref name="winui"/> and the
+    /// package's own declared dependencies decide the whole stack.
+    ///
     /// An optional <paramref name="payload"/> copies loose local files over the lot,
     /// which is the quickest way to test a private build of any runtime binary.
     /// </summary>
     public async Task<string> EnsureRunnerAsync(
-        string version,
+        string? version,
         string baseRunnerDir,
         WinUiOverride? winui = null,
         RunnerPayload? payload = null,
         IProgress<ProvisionProgress>? progress = null,
         CancellationToken ct = default)
     {
-        ArgumentNullException.ThrowIfNull(version);
         ArgumentNullException.ThrowIfNull(baseRunnerDir);
+        if (version is null && winui is null)
+        {
+            throw new ArgumentException(
+                "Give a Windows App SDK version, a WinUI override, or both.",
+                nameof(version));
+        }
 
-        string folderName = winui is null ? version : $"{version}__{winui.CacheKey}";
+        string folderName = (version, winui) switch
+        {
+            (null, not null) => winui.CacheKey,
+            (not null, null) => version,
+            _ => $"{version}__{winui!.CacheKey}",
+        };
         if (payload is not null)
         {
             // A separate folder, so runs without a payload keep using untouched stock
@@ -192,11 +209,31 @@ public sealed class RunnerProvisioner
             Directory.Delete(staging, recursive: true);
         }
 
-        Report(progress, $"Preparing runner for WASDK {version}...");
+        Report(progress, version is null
+            ? "Preparing runner..."
+            : $"Preparing runner for WASDK {version}...");
         CopyDirectory(baseRunnerDir, staging);
 
-        Report(progress, $"Resolving components for {version}...");
-        IReadOnlyList<(string Id, string Version)> components = await ResolveComponentsAsync(version, ct);
+        IReadOnlyList<(string Id, NuGetVersion Version)> components;
+        if (version is null)
+        {
+            // WinUI-driven. The package declares the stack it expects, so fetch exactly that
+            // closure. The base runner's own Windows App SDK payload stays underneath and
+            // supplies the parts WinUI does not declare (DWrite, AI, ML, Widgets), which a
+            // XAML repro does not touch. What gets overwritten is the whole XAML stack.
+            Report(progress, "Resolving components from the WinUI package...");
+            components = await ResolveWinUiClosureAsync(winui!, ct).ConfigureAwait(false);
+        }
+        else
+        {
+            Report(progress, $"Resolving components for {version}...");
+            components = await ResolveComponentsAsync(version, ct).ConfigureAwait(false);
+
+            if (winui is not null && components.Count > 0)
+            {
+                components = await RaiseFloorsForWinUiAsync(components, winui, progress, ct).ConfigureAwait(false);
+            }
+        }
 
         if (components.Count == 0)
         {
@@ -206,7 +243,7 @@ public sealed class RunnerProvisioner
             // We detect this by the absence of components, not a version number, so the
             // 1.7 -> 1.8 cutover (and any future one) is handled automatically.
             Report(progress, $"Extracting Windows App SDK {version} runtime...");
-            string metaDir = await EnsurePackageAsync(MetapackageId, version, ct);
+            string metaDir = await EnsurePackageAsync(MetapackageId, version!, ct).ConfigureAwait(false);
             CopyComponentNativeFiles(metaDir, staging);
             ExtractFrameworkMsix(metaDir, staging);
         }
@@ -214,16 +251,16 @@ public sealed class RunnerProvisioner
         {
             // Newer layout (WASDK 1.8+): the runtime lives in component sub-packages
             // (Foundation, WinUI, Runtime, ...), each with loose self-contained files.
-            foreach ((string id, string componentVersion) in components)
+            foreach ((string id, NuGetVersion componentVersion) in components)
             {
-                // When overriding WinUI, skip the metapackage's WinUI so the override wins.
+                // When overriding WinUI, skip the resolved WinUI so the override wins.
                 if (winui is not null && id.Equals(WinUiComponentId, StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
 
-                Report(progress, $"Fetching {id} {componentVersion}...");
-                string pkgDir = await EnsurePackageAsync(id, componentVersion, ct);
+                Report(progress, $"Fetching {id} {componentVersion.ToNormalizedString()}...");
+                string pkgDir = await EnsurePackageAsync(id, componentVersion, ct).ConfigureAwait(false);
                 CopyComponentNativeFiles(pkgDir, staging);
             }
         }
@@ -265,6 +302,88 @@ public sealed class RunnerProvisioner
         return !File.Exists(copiedDll)
             || File.GetLastWriteTimeUtc(baseDll) != File.GetLastWriteTimeUtc(copiedDll);
     }
+
+    /// <summary>
+    /// The full component set a WinUI override needs, from its own declared dependencies.
+    /// </summary>
+    private async Task<IReadOnlyList<(string Id, NuGetVersion Version)>> ResolveWinUiClosureAsync(
+        WinUiOverride winui,
+        CancellationToken ct)
+    {
+        var pkg = await ReadWinUiPackageAsync(winui, ct).ConfigureAwait(false);
+        if (pkg is null)
+        {
+            throw new InvalidOperationException(
+                $"{Describe(winui)} declares no Windows App SDK dependencies, so it cannot decide "
+                + "the stack on its own. Pass a Windows App SDK version as well, or build the "
+                + "package with the WinUI repo's 'build.cmd /version <version>', which stamps the "
+                + "Base, Foundation and InteractiveExperiences versions it was built against.");
+        }
+
+        return await ResolveClosureAsync(pkg.Value.Id, pkg.Value.Version, pkg.Value.Dependencies, ct)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Raises any Windows App SDK component below what the WinUI override asks for, so a
+    /// WinUI build lands on the stack it was compiled against. The Windows App SDK version
+    /// still supplies everything WinUI does not declare (AI, ML, Widgets, DWrite).
+    ///
+    /// This is the check that was missing when a WinUI build compiled against Foundation
+    /// 3.0.0 was dropped onto Windows App SDK 2.3.1, which provides 2.3.5. Nothing
+    /// complained, and the mismatch surfaced days later as an unexplained E_NOINTERFACE.
+    /// </summary>
+    private async Task<IReadOnlyList<(string Id, NuGetVersion Version)>> RaiseFloorsForWinUiAsync(
+        IReadOnlyList<(string Id, NuGetVersion Version)> components,
+        WinUiOverride winui,
+        IProgress<ProvisionProgress>? progress,
+        CancellationToken ct)
+    {
+        var pkg = await ReadWinUiPackageAsync(winui, ct).ConfigureAwait(false);
+        if (pkg is null)
+        {
+            // Nothing declared, so nothing to check. Shape-only packages land here.
+            return components;
+        }
+
+        IReadOnlyList<(string Id, NuGetVersion Version)> closure =
+            await ResolveClosureAsync(pkg.Value.Id, pkg.Value.Version, pkg.Value.Dependencies, ct)
+                .ConfigureAwait(false);
+
+        var merged = components.ToDictionary(c => c.Id, c => c.Version, StringComparer.OrdinalIgnoreCase);
+        foreach ((string id, NuGetVersion required) in closure)
+        {
+            if (id.Equals(WinUiComponentId, StringComparison.OrdinalIgnoreCase))
+            {
+                // The override supplies WinUI itself; its own version is not a constraint.
+                continue;
+            }
+
+            if (!merged.TryGetValue(id, out NuGetVersion? provided))
+            {
+                Report(progress, $"{Describe(winui)} needs {id} {required.ToNormalizedString()}, adding it.");
+                merged[id] = required;
+            }
+            else if (required > provided)
+            {
+                Report(
+                    progress,
+                    $"{Describe(winui)} needs {id} {required.ToNormalizedString()}, "
+                    + $"but this Windows App SDK provides {provided.ToNormalizedString()}. Raising it.");
+                merged[id] = required;
+            }
+        }
+
+        return merged
+            .Select(kv => (Id: kv.Key, Version: kv.Value))
+            .OrderBy(c => c.Id, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static string Describe(WinUiOverride winui) =>
+        winui.LocalNupkgPath is not null
+            ? Path.GetFileName(winui.LocalNupkgPath)
+            : "WinUI " + winui.NuGetVersion;
 
     private async Task ApplyWinUiOverrideAsync(
         WinUiOverride winui,
@@ -315,58 +434,227 @@ public sealed class RunnerProvisioner
         return dir;
     }
 
-    private async Task<IReadOnlyList<(string Id, string Version)>> ResolveComponentsAsync(
+    /// <summary>
+    /// The components a Windows App SDK metapackage version is made of. Empty for the
+    /// older layout (1.7 and earlier), where the metapackage carries the runtime itself.
+    /// </summary>
+    private async Task<IReadOnlyList<(string Id, NuGetVersion Version)>> ResolveComponentsAsync(
         string version,
         CancellationToken ct)
     {
-        string pkgDir = await EnsurePackageAsync(MetapackageId, version, ct);
-        string nuspec = Path.Combine(pkgDir, MetapackageId.ToLowerInvariant() + ".nuspec");
-        XDocument doc = XDocument.Load(nuspec);
-
-        var components = new List<(string, string)>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (XElement dep in doc.Descendants().Where(e => e.Name.LocalName == "dependency"))
+        if (!NuGetVersion.TryParse(version, out NuGetVersion? parsed))
         {
-            string? id = dep.Attribute("id")?.Value;
-            string? depVersion = dep.Attribute("version")?.Value;
-            if (id is null || depVersion is null)
+            throw new InvalidOperationException($"'{version}' is not a valid Windows App SDK version.");
+        }
+
+        IReadOnlyList<PackageDependency> deps =
+            await _feed.GetDependenciesAsync(MetapackageId, parsed, ComponentPrefix, ct).ConfigureAwait(false);
+
+        var components = new List<(string Id, NuGetVersion Version)>(deps.Count);
+        foreach (PackageDependency dep in deps)
+        {
+            NuGetVersion? resolved = await _feed
+                .ResolveVersionAsync(dep.Id, dep.VersionRange, ct).ConfigureAwait(false);
+            if (resolved is null)
             {
-                continue;
+                throw new InvalidOperationException(
+                    $"No version of {dep.Id} satisfies {dep.VersionRange.PrettyPrint()}, "
+                    + $"which Windows App SDK {version} asks for. Tried: "
+                    + string.Join(", ", _feed.Sources) + ".");
             }
 
-            if (!id.StartsWith(MetapackageId + ".", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            if (seen.Add(id))
-            {
-                components.Add((id, depVersion.Trim('[', ']', '(', ')')));
-            }
+            components.Add((dep.Id, resolved));
         }
 
         return components;
     }
 
+    /// <summary>
+    /// Walks a package's Windows App SDK dependencies transitively and returns everything
+    /// needed to run it, the root included.
+    ///
+    /// This is what makes a WinUI package able to stand on its own. WinUI declares Base,
+    /// Foundation and InteractiveExperiences; Foundation declares Base and
+    /// InteractiveExperiences; and Base declares nothing. The closure is those four, and
+    /// it is complete - Runtime and Base carry no binaries at all, and nothing in the XAML
+    /// stack references the one binary DWrite contributes.
+    ///
+    /// A bare NuGet version is a floor, not a pin, so when two packages ask for different
+    /// versions of the same component the higher ask wins. That is also why this cannot be
+    /// an equality check: a healthy Windows App SDK 2.3.1 ships Foundation 2.3.5 while its
+    /// own WinUI only asks for 2.3.1.
+    ///
+    /// A floor is also not necessarily a version anyone published. WinUI 2.3.0 asks for
+    /// Foundation &gt;= 2.3.1, and there is no Foundation 2.3.1 - the first one that
+    /// satisfies it is 2.3.5. Every range therefore goes through the resolver rather than
+    /// being read as a version to fetch.
+    /// </summary>
+    private async Task<IReadOnlyList<(string Id, NuGetVersion Version)>> ResolveClosureAsync(
+        string rootId,
+        NuGetVersion rootVersion,
+        IReadOnlyList<PackageDependency> rootDependencies,
+        CancellationToken ct)
+    {
+        // The root is pinned: the user picked that exact build, so nothing may move it.
+        var resolved = new Dictionary<string, NuGetVersion>(StringComparer.OrdinalIgnoreCase)
+        {
+            [rootId] = rootVersion,
+        };
+
+        var floors = new Dictionary<string, VersionRange>(StringComparer.OrdinalIgnoreCase);
+        var queue = new Queue<string>();
+
+        foreach (PackageDependency dep in rootDependencies)
+        {
+            if (dep.Id.Equals(rootId, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            floors[dep.Id] = dep.VersionRange;
+            queue.Enqueue(dep.Id);
+        }
+
+        while (queue.Count > 0)
+        {
+            string id = queue.Dequeue();
+            VersionRange range = floors[id];
+
+            NuGetVersion? version = await _feed.ResolveVersionAsync(id, range, ct).ConfigureAwait(false);
+            if (version is null)
+            {
+                throw new InvalidOperationException(
+                    $"No version of {id} satisfies {range.PrettyPrint()}. Tried: "
+                    + string.Join(", ", _feed.Sources)
+                    + ". Experimental component builds usually live on an internal feed - "
+                    + "add it to a nuget.config next to the repro file.");
+            }
+
+            if (resolved.TryGetValue(id, out NuGetVersion? already) && already == version)
+            {
+                // A raised floor that lands on the same version teaches us nothing new.
+                continue;
+            }
+
+            resolved[id] = version;
+
+            IReadOnlyList<PackageDependency> deps = await _feed
+                .GetDependenciesAsync(id, version, ComponentPrefix, ct).ConfigureAwait(false);
+
+            foreach (PackageDependency dep in deps)
+            {
+                if (dep.Id.Equals(rootId, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                // Re-queue on a raised floor as well as on a first sighting: a higher
+                // version can pull in dependencies the lower one never had.
+                if (!floors.TryGetValue(dep.Id, out VersionRange? known)
+                    || IsHigherFloor(dep.VersionRange, known))
+                {
+                    floors[dep.Id] = dep.VersionRange;
+                    queue.Enqueue(dep.Id);
+                }
+            }
+        }
+
+        return resolved
+            .Select(kv => (Id: kv.Key, Version: kv.Value))
+            .OrderBy(c => c.Id, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static bool IsHigherFloor(VersionRange candidate, VersionRange known) =>
+        candidate.MinVersion is { } a && (known.MinVersion is not { } b || a > b);
+
+    /// <summary>
+    /// What a WinUI override says it needs. A package built by the WinUI repo's
+    /// <c>build.cmd /version</c> declares its real Base, Foundation and
+    /// InteractiveExperiences versions, so it fully describes the stack it expects.
+    /// Returns null when the package declares nothing, which is the case for the
+    /// shape-only packages <c>tools\pack-local-winui.ps1</c> produces.
+    /// </summary>
+    private async Task<(string Id, NuGetVersion Version, IReadOnlyList<PackageDependency> Dependencies)?>
+        ReadWinUiPackageAsync(WinUiOverride winui, CancellationToken ct)
+    {
+        if (winui.LocalNupkgPath is null)
+        {
+            if (!NuGetVersion.TryParse(winui.NuGetVersion!, out NuGetVersion? parsed))
+            {
+                return null;
+            }
+
+            IReadOnlyList<PackageDependency> feedDeps = await _feed
+                .GetDependenciesAsync(WinUiComponentId, parsed, ComponentPrefix, ct).ConfigureAwait(false);
+            return feedDeps.Count == 0 ? null : (WinUiComponentId, parsed, feedDeps);
+        }
+
+        using var reader = new PackageArchiveReader(winui.LocalNupkgPath);
+
+        PackageIdentity identity;
+        IReadOnlyList<PackageDependency> deps;
+        try
+        {
+            identity = reader.GetIdentity();
+            deps = NuGetFeed.FilterDependencies(
+                reader.GetPackageDependencies().SelectMany(g => g.Packages),
+                ComponentPrefix);
+        }
+        catch (PackagingException)
+        {
+            // No nuspec at all. Shape-only packages land here, and "declares nothing"
+            // is the answer the callers want - they have a much better message for it
+            // than NuGet's raw "missing the required nuspec file".
+            return null;
+        }
+
+        return deps.Count == 0 ? null : (identity.Id, identity.Version, deps);
+    }
+
     private async Task<string> EnsurePackageAsync(string id, string version, CancellationToken ct)
     {
-        string lowerId = id.ToLowerInvariant();
-        string dir = Path.Combine(_nupkgCache, lowerId, version);
+        if (!NuGetVersion.TryParse(version, out NuGetVersion? parsed))
+        {
+            throw new InvalidOperationException($"'{version}' is not a valid NuGet version for {id}.");
+        }
+
+        return await EnsurePackageAsync(id, parsed, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Downloads and unzips a package into the cache, returning its folder. The folder
+    /// name uses the normalized version so a single package cannot land twice under two
+    /// spellings of the same version.
+    /// </summary>
+    private async Task<string> EnsurePackageAsync(string id, NuGetVersion version, CancellationToken ct)
+    {
+        string dir = Path.Combine(_nupkgCache, id.ToLowerInvariant(), version.ToNormalizedString());
         if (Directory.Exists(dir))
         {
             return dir;
         }
 
-        string url = $"{FlatContainer}{lowerId}/{version}/{lowerId}.{version}.nupkg";
-        byte[] bytes = await _http.GetByteArrayAsync(url, ct);
-
         Directory.CreateDirectory(Path.GetDirectoryName(dir)!);
         string temp = dir + ".tmp-" + Guid.NewGuid().ToString("N");
         try
         {
-            using (var ms = new MemoryStream(bytes))
-            using (var archive = new ZipArchive(ms, ZipArchiveMode.Read))
+            using (var buffer = new MemoryStream())
             {
+                if (!await _feed.TryDownloadAsync(id, version, buffer, ct).ConfigureAwait(false))
+                {
+                    // Loud on purpose. Silently carrying on with a different version is how a
+                    // WinUI build compiled against Foundation 3.0.0 ended up running on 2.3.5,
+                    // which failed much later as an unexplained E_NOINTERFACE.
+                    throw new InvalidOperationException(
+                        $"{id} {version.ToNormalizedString()} was not found on any package source. "
+                        + $"Tried: {string.Join(", ", _feed.Sources)}. "
+                        + "Experimental component builds usually live on an internal feed - "
+                        + "add it to a nuget.config next to the repro file.");
+                }
+
+                buffer.Position = 0;
+                using var archive = new ZipArchive(buffer, ZipArchiveMode.Read);
                 archive.ExtractToDirectory(temp);
             }
 
@@ -514,10 +802,4 @@ public sealed class RunnerProvisioner
 
     private static void Report(IProgress<ProvisionProgress>? progress, string message) =>
         progress?.Report(new ProvisionProgress { Message = message });
-
-    private sealed class FlatIndex
-    {
-        [System.Text.Json.Serialization.JsonPropertyName("versions")]
-        public List<string> Versions { get; set; } = new();
-    }
 }

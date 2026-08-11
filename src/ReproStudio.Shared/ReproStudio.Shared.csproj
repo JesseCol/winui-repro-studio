@@ -19,6 +19,21 @@
   </PropertyGroup>
 
   <!--
+    The real NuGet client, used for everything that touches a feed: source discovery from
+    nuget.config, version listing, download, and reading a package's declared dependencies.
+
+    Worth the ~2.5 MB it adds. Hand-rolling this got two things wrong that mattered:
+    prerelease versions compared as plain strings (so "experimental10" sorted below
+    "experimental9"), and flat-container URLs built by hand 404'd on versions whose
+    normalization we guessed wrong. It also hardcoded nuget.org, which meant an internal
+    feed was out of reach. NuGet.Protocol fixes all three by being the same code NuGet
+    itself runs.
+  -->
+  <ItemGroup>
+    <PackageReference Include="NuGet.Protocol" Version="6.14.0" />
+  </ItemGroup>
+
+  <!--
     Identity manifest + assets used to give the runner package identity. It lives here
     rather than in either host because both hosts can launch packaged, and it is
     PackagedRunnerLauncher (in this project) that reads it.

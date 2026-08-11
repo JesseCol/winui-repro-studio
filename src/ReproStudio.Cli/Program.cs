@@ -66,8 +66,7 @@ internal static class Program
 
     private static async Task<int> ListVersionsAsync(AppLayout layout, CliOptions options, CancellationToken ct)
     {
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-        var provisioner = new RunnerProvisioner(http, layout.CacheRoot);
+        var provisioner = new RunnerProvisioner(layout.CacheRoot);
 
         IReadOnlyList<string> versions;
         try
