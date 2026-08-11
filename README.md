@@ -259,6 +259,9 @@ file...**, after which the in-app editors turn into a read-only mirror.
 Want something to open right now? There are ready-made repros in
 [`samples/`](samples/) - try `samples/hello.cs`.
 
+Bigger measurement harnesses written to chase a specific bug live in
+[`investigations/`](investigations/), each with a write-up of what it found.
+
 ```csharp
 // repro:      My cool bug
 // wasdk:      1.7            <- partial is fine; newest 1.7.x wins (see below)
