@@ -35,14 +35,22 @@ not switch anything to framework-dependent to shrink the build.
 
 ## Build
 
+Build the **project**, not the solution:
+
 ```powershell
-dotnet build .\ReproStudio.slnx -c Debug -p:Platform=x64
+dotnet build .\src\ReproStudio.Cli\ReproStudio.Cli.csproj -c Debug -p:Platform=x64
 ```
 
+- **`-p:Platform` does not reach the projects through the `.slnx`.** Building the
+  solution writes `bin\Debug\`, while `pack.ps1` (which builds projects directly)
+  writes `bin\x64\Debug\`. Mixing the two silently runs stale binaries. This has
+  already cost one bogus verification run. Build projects directly.
 - Use the `dotnet` CLI (SDK 10.x). VS2022's MSBuild resolves an older SDK and
   fails with NETSDK1045 on net10.
-- Self-contained output lands under a RID subfolder
-  (`bin\x64\Debug\<tfm>\win-x64\`). Ask MSBuild for `OutDir`, don't guess.
+- Self-contained output lands under a RID subfolder. Don't guess the path, ask:
+  ```powershell
+  dotnet msbuild <proj> -getProperty:OutDir -p:Configuration=Debug -p:Platform=x64
+  ```
 - Do not delete the near-empty `Directory.Build.props` at the repo root. It stops
   MSBuild's upward search from finding an unrelated parent props file.
 - There are no tests. Verify by running it.

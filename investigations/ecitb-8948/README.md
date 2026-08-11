@@ -88,9 +88,9 @@ within 1/255, which is what makes these numbers worth writing down.
 The prototype's top row has the alpha of an **active** border and the tint of an
 **inactive** one. Close, not matching.
 
-## The DWM-glass prototype: unresolved
+## The DWM-glass prototype: blocked on a version mismatch
 
-A candidate fix (a chk build of `Microsoft.ui.xaml.dll` overlaid on retail WASDK
+A candidate fix (a private build of `Microsoft.ui.xaml.dll` overlaid on WASDK
 2.3.1) crashes on Windows 10 1809:
 
 - `System.InvalidCastException: No such interface supported` - an E_NOINTERFACE
@@ -107,11 +107,19 @@ Ruled out by bisection: both ECITB entry points, a plain control window with no
 ECITB, window count, the measurement phase, and WASDK version differences.
 Every single subject crashes on its own.
 
-**Don't report this as a defect in the fix without settling one thing first.**
-The payload is a *checked* build mixed with *retail* WASDK components. A chk/retail
-mix can produce QI failures on internal interfaces whose IIDs or vtables differ
-between flavours. Test a retail build of the same change before concluding
-anything about the change itself.
+**This is a version mismatch, not a defect in the change.** The candidate
+`Microsoft.ui.xaml.dll` was built against Foundation and InteractiveExperiences
+**3.0.0** (see `eng\Version.Details.xml` in the WinUI repo), and it was dropped
+onto WASDK 2.3.1, which ships Foundation 2.3.5 and InteractiveExperiences 2.1.3.
+That is a major-version ABI gap, and E_NOINTERFACE from a QI is exactly what it
+looks like. Nothing about the title-bar change is implicated.
+
+The overlay path (`--payload`, or a shape-only nupkg) cannot catch this, because
+loose files carry no version metadata. Rebuild the candidate with the WinUI repo's
+`build.cmd /version <version>` and pass the resulting `.nupkg` to `--winui`.
+ReproStudio then reads the package's declared dependencies and provisions the
+stack it was actually compiled against. See "Test a WinUI repo build" in the root
+README.
 
 ## Gotchas that cost real time
 
