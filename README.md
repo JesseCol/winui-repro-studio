@@ -128,9 +128,11 @@ ReproStudio.exe <file.cs> [options]
 |---|---|
 | `--wasdk <version>` | WASDK version. Partial is fine (`1.6` picks the newest 1.6). Overrides the file header. |
 | `--winui <ver\|path>` | Override just the WinUI component: a version, or a local `.nupkg`. |
+| `--payload <dir>` | Copy every file in `<dir>` over the runner. The quick way to test a private build. `none` disables it. |
 | `--packaged` / `--unpackaged` | Force package identity on or off. |
 | `--prerelease` | Include prerelease versions when resolving and listing. |
 | `--no-watch` | Launch and exit, leaving the runner running. |
+| `--provision-only` | Prepare the runner, then exit without launching. Warms the cache. |
 | `--clear-cache` | Delete provisioned runners first (downloads are kept). |
 | `--list` | List available WASDK versions and exit. |
 | `--doctor` | Print environment diagnostics and exit. |
@@ -144,6 +146,65 @@ instead. If the runner dies on its own, the console says so and prints whatever
 the runner appended to its crash log.
 
 Ctrl+C stops the runner and unregisters the package.
+
+## Test a private build: the payload folder
+
+Provisioning a runner is really just "copy the base runner, then copy a WASDK
+version's native files over it". The payload folder adds one more copy on the end,
+so testing a private build of `Microsoft.ui.xaml.dll` is a matter of dropping the
+file somewhere and running:
+
+```powershell
+ReproStudio.exe samples\hello.cs --payload D:\my-winui-build
+```
+
+Whatever is in that folder wins over the stock file of the same name. Files keep
+their relative paths, so a subfolder like `Microsoft.UI.Xaml\` (the themes
+directory) works the same as a loose DLL.
+
+Three ways to point at one, in priority order:
+
+| How | Example |
+|---|---|
+| `--payload <dir>` | `--payload D:\my-winui-build` |
+| `// payload:` header | `// payload: ..\my-build` (relative to the repro file) |
+| A `payload\` folder next to `ReproStudio.exe` | just run it |
+
+That last one is why the packed bundle ships an empty `payload\` folder. Copy a
+DLL in, run, and you are testing it. Nothing to configure.
+
+The folder is watched, so rebuilding the DLL and copying it in relaunches the
+repro on its own. Use `--payload none` to ignore the default folder for one run,
+which is how you get a stock comparison without moving files around.
+
+A few things worth knowing:
+
+- Payload runners are provisioned into a separate `<version>+payload` folder, so
+  runs without a payload keep using untouched stock bits.
+- Changing the payload rebuilds that folder. An overlaid file can't be
+  un-overlaid in place, because nothing recorded what it used to be.
+- `.txt` and `.md` files are ignored, so the folder can carry a README without
+  that counting as content.
+- Nothing is validated. Drop in a binary that doesn't load and the runner will
+  fail to start and say so.
+
+**Always take a stock reading before you trust a payload reading.** If the
+private build changes nothing, that's worth knowing; if it changes everything,
+you want to be sure the harness itself was working.
+
+### `--payload` or `--winui`?
+
+Both put private bits in front of the runner. They solve different problems.
+
+| | `--payload <dir>` | `--winui <path.nupkg>` |
+|---|---|---|
+| Input | Loose files | A built `.nupkg` |
+| Best for | One rebuilt DLL, iterating fast | A full WinUI build you want to keep and share |
+| Setup | Copy a file in | Pack a nupkg first (`tools\pack-local-winui.ps1`) |
+| Granularity | Any file, any subfolder | The WinUI component |
+
+For a tight edit-build-test loop, use `--payload`. To hand someone a bundle that
+runs a specific build, use `--winui` and `pack.ps1 -LocalWinUi`.
 
 ## Run the WinUI host
 
@@ -202,6 +263,7 @@ Want something to open right now? There are ready-made repros in
 // repro:      My cool bug
 // wasdk:      1.7            <- partial is fine; newest 1.7.x wins (see below)
 // winui:      default        <- or a version, or a path to a local .nupkg
+// payload:    none           <- or a folder of files to copy over the runner
 // packaged:   no             <- give the runner package identity
 // theme:      Dark           <- Default | Light | Dark
 // flow:       LeftToRight    <- LeftToRight | RightToLeft
@@ -234,8 +296,8 @@ Every header key is optional, and order doesn't matter. Two kinds of keys:
 
 - **Live** (`theme`, `flow`, `background`, `topmost`) and the XAML/C# itself: a
   save just re-renders in place. Fast.
-- **Launch-time** (`wasdk`, `winui`, `packaged`, `dpi`): these pick which Runner
-  exe runs and how, so a change re-provisions and relaunches.
+- **Launch-time** (`wasdk`, `winui`, `payload`, `packaged`, `dpi`): these pick
+  which Runner exe runs and how, so a change re-provisions and relaunches.
 
 ### You don't have to type the whole WASDK version
 
@@ -472,6 +534,13 @@ Everything lives under `%LOCALAPPDATA%\winui-repro-app\`, or wherever
 | `nupkgs\`      | Downloaded + extracted WASDK NuGet packages. |
 | `versions\`    | One assembled runner per version you've used. |
 | `local-winui\` | Extracted local WinUI `.nupkg` overrides. |
+
+A folder in `versions\` is named after what went into it: `1.7.250401001`, or
+`1.7.250401001__<winui-key>` with a `--winui` override, plus a `+payload` suffix
+when a payload folder was applied. Payload runners are kept separate so a run
+without one still gets untouched stock bits, and the suffix is fixed rather than
+per-payload so iterating on a DLL replaces the folder instead of leaving a
+350 MB copy behind every time.
 
 `--clear-cache` (console) and the **Clear cache** button (GUI) wipe `versions\`
 and `local-winui\`, keeping `nupkgs\` so re-provisioning is fast. Handy after you

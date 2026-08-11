@@ -1,6 +1,7 @@
 // repro:      Every header key
 // wasdk:      1.7
 // winui:      default
+// payload:    none
 // packaged:   no
 // theme:      Dark
 // flow:       LeftToRight
@@ -18,6 +19,10 @@
 //               network lookup entirely.
 //   winui       Override just the WinUI component. A version, a path to a local
 //               .nupkg (relative paths resolve next to this file), or "default".
+//   payload     Folder of loose files to copy over the runner, after the WASDK
+//               version is laid down. Drop a private Microsoft.ui.xaml.dll in
+//               and it wins over the stock one. Relative paths resolve next to
+//               this file. "none" ignores the default payload\ folder.
 //   packaged    yes/no. Registers the runner as a loose-layout package so it
 //               runs with real package identity. Needs Developer Mode.
 //   theme       Default | Light | Dark
@@ -26,7 +31,7 @@
 //   background  Stage colour behind your XAML. Any XAML colour string.
 //   topmost     yes/no. Keeps the runner above other windows.
 //
-// theme, flow, background and topmost apply live on save. wasdk, winui,
+// theme, flow, background and topmost apply live on save. wasdk, winui, payload,
 // packaged and dpi relaunch the runner, so they take a couple of seconds.
 
 class Repro

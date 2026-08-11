@@ -749,7 +749,7 @@ public partial class MainViewModel : ObservableObject
                 {
                     StatusText = $"Preparing Windows App SDK {version}...";
                     string exe = await Task.Run(() =>
-                        _provisioner.EnsureRunnerAsync(version, _layout.BaseRunnerDir, winui, _provisionProgress));
+                        _provisioner.EnsureRunnerAsync(version, _layout.BaseRunnerDir, winui, progress: _provisionProgress));
 
                     _currentExe = exe;
                     string winuiSuffix = winui is null ? string.Empty : $" + WinUI {winuiOption!.Display}";

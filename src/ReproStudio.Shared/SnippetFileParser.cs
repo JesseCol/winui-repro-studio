@@ -28,6 +28,13 @@ public sealed class ParsedSnippetFile
     public string? WinUiToken { get; init; }
 
     /// <summary>
+    /// Folder of loose files to copy over the provisioned runner (<c>// payload:</c>),
+    /// or null when the header does not say. Relative paths are resolved against the
+    /// repro file.
+    /// </summary>
+    public string? PayloadDir { get; init; }
+
+    /// <summary>
     /// Launch-time: whether to give the runner package identity (<c>// packaged:</c>).
     /// Null when the header does not say, so a command-line default can win.
     /// </summary>
@@ -71,7 +78,7 @@ public static class SnippetFileParser
 
     private static readonly HashSet<string> KnownKeys = new(StringComparer.OrdinalIgnoreCase)
     {
-        "repro", "title", "wasdk", "winui", "packaged", "dpi",
+        "repro", "title", "wasdk", "winui", "payload", "packaged", "dpi",
         "theme", "flow", "background", "topmost",
     };
 
@@ -91,6 +98,7 @@ public static class SnippetFileParser
             Title = title,
             WasdkVersion = Get(header, "wasdk"),
             WinUiToken = winuiToken,
+            PayloadDir = Get(header, "payload"),
             Packaged = ParseBool(Get(header, "packaged")),
             Dpi = ParseDpi(Get(header, "dpi")),
             Theme = NormalizeTheme(Get(header, "theme")),

@@ -36,11 +36,12 @@ public sealed class AppLayout
     /// </summary>
     public const string CacheRootVariable = "REPROSTUDIO_CACHE";
 
-    private AppLayout(string cacheRoot, string baseRunnerDir, bool isPortable)
+    private AppLayout(string cacheRoot, string baseRunnerDir, bool isPortable, string payloadDir)
     {
         CacheRoot = cacheRoot;
         BaseRunnerDir = baseRunnerDir;
         IsPortable = isPortable;
+        DefaultPayloadDir = payloadDir;
     }
 
     /// <summary>Writable root for downloaded packages and provisioned runners.</summary>
@@ -51,6 +52,12 @@ public sealed class AppLayout
 
     /// <summary>True when the base runner was found next to the host exe (xcopy bundle).</summary>
     public bool IsPortable { get; }
+
+    /// <summary>
+    /// Drop folder next to the host exe. Any files here are copied over the provisioned
+    /// runner, so testing a private build is a matter of copying a DLL in. May not exist.
+    /// </summary>
+    public string DefaultPayloadDir { get; }
 
     /// <summary>True when a usable base runner is actually on disk.</summary>
     public bool HasBaseRunner => Directory.Exists(BaseRunnerDir);
@@ -76,9 +83,10 @@ public sealed class AppLayout
                 "winui-repro-app");
 
         string bundled = Path.Combine(appDirectory, BaseRunnerFolderName);
+        string payload = Path.Combine(appDirectory, RunnerPayload.DefaultFolderName);
         return Directory.Exists(bundled)
-            ? new AppLayout(cacheRoot, bundled, isPortable: true)
-            : new AppLayout(cacheRoot, Path.Combine(cacheRoot, BaseRunnerFolderName), isPortable: false);
+            ? new AppLayout(cacheRoot, bundled, isPortable: true, payload)
+            : new AppLayout(cacheRoot, Path.Combine(cacheRoot, BaseRunnerFolderName), isPortable: false, payload);
     }
 
     /// <summary>

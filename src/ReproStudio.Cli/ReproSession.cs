@@ -17,6 +17,12 @@ internal sealed class ReproSession : IDisposable
     /// <summary>How long to wait after a file change, so one save is one reload.</summary>
     private static readonly TimeSpan SaveDebounce = TimeSpan.FromMilliseconds(150);
 
+    /// <summary>
+    /// Longer debounce for the payload folder. Copying a runtime DLL in takes a moment
+    /// and raises events throughout, so a save-sized delay would fire mid-copy.
+    /// </summary>
+    private static readonly TimeSpan PayloadDebounce = TimeSpan.FromSeconds(2);
+
     /// <summary>How often to notice that the runner died on its own.</summary>
     private static readonly TimeSpan HealthInterval = TimeSpan.FromSeconds(1);
 
@@ -32,6 +38,7 @@ internal sealed class ReproSession : IDisposable
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     private FileSystemWatcher? _watcher;
+    private FileSystemWatcher? _payloadWatcher;
     private System.Threading.Timer? _debounce;
     private CancellationToken _ct;
 
@@ -67,10 +74,11 @@ internal sealed class ReproSession : IDisposable
     }
 
     /// <summary>Everything that forces a new runner process when it changes.</summary>
-    private readonly record struct LaunchPlan(string Version, string WinUiKey, bool Packaged, int Dpi)
+    private readonly record struct LaunchPlan(string Version, string WinUiKey, string PayloadKey, bool Packaged, int Dpi)
     {
         public string Describe() => Version
             + (WinUiKey.Length == 0 ? string.Empty : " + winui " + WinUiKey)
+            + (PayloadKey.Length == 0 ? string.Empty : " + payload " + PayloadKey)
             + (Packaged ? " (packaged)" : string.Empty);
     }
 
@@ -111,7 +119,9 @@ internal sealed class ReproSession : IDisposable
         if (!_options.Watch)
         {
             Log.Blank();
-            Log.Ok("Runner left running. Re-run to pick up edits.");
+            Log.Ok(_options.ProvisionOnly
+                ? "Runner ready. Nothing launched."
+                : "Runner left running. Re-run to pick up edits.");
             return 0;
         }
 
@@ -129,6 +139,7 @@ internal sealed class ReproSession : IDisposable
     public void Dispose()
     {
         _watcher?.Dispose();
+        _payloadWatcher?.Dispose();
         _debounce?.Dispose();
         _gate.Dispose();
 
@@ -163,13 +174,16 @@ internal sealed class ReproSession : IDisposable
 
         LaunchPlan plan;
         WinUiOverride? winui;
+        RunnerPayload? payload;
         try
         {
             winui = ResolveWinUi(parsed.WinUiToken);
+            payload = ResolvePayload(parsed.PayloadDir);
             string version = await ResolveVersionAsync(parsed.WasdkVersion).ConfigureAwait(false);
             plan = new LaunchPlan(
                 version,
                 winui?.CacheKey ?? string.Empty,
+                payload?.Fingerprint ?? string.Empty,
                 _options.Packaged ?? parsed.Packaged ?? false,
                 parsed.Dpi ?? 100);
         }
@@ -193,10 +207,10 @@ internal sealed class ReproSession : IDisposable
             Log.Event("relaunching: " + plan.Describe());
         }
 
-        return await ProvisionAndLaunchAsync(plan, winui, firstRun).ConfigureAwait(false);
+        return await ProvisionAndLaunchAsync(plan, winui, payload, firstRun).ConfigureAwait(false);
     }
 
-    private async Task<bool> ProvisionAndLaunchAsync(LaunchPlan plan, WinUiOverride? winui, bool firstRun)
+    private async Task<bool> ProvisionAndLaunchAsync(LaunchPlan plan, WinUiOverride? winui, RunnerPayload? payload, bool firstRun)
     {
         if (firstRun)
         {
@@ -207,6 +221,15 @@ internal sealed class ReproSession : IDisposable
                 Log.Field("winui", winui.LocalNupkgPath ?? winui.NuGetVersion ?? "default");
             }
 
+            if (payload is not null)
+            {
+                Log.Field("payload", $"{payload.RelativePaths.Count} file(s) from {payload.Directory}");
+                foreach (string relative in payload.RelativePaths)
+                {
+                    Log.Detail(relative);
+                }
+            }
+
             Log.Field("packaged", plan.Packaged ? "yes" : "no");
         }
 
@@ -215,7 +238,7 @@ internal sealed class ReproSession : IDisposable
         {
             var progress = new Progress<ProvisionProgress>(p => Log.Detail(p.Message));
             exe = await _provisioner
-                .EnsureRunnerAsync(plan.Version, _layout.BaseRunnerDir, winui, progress, _ct)
+                .EnsureRunnerAsync(plan.Version, _layout.BaseRunnerDir, winui, payload, progress, _ct)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException)
@@ -232,6 +255,15 @@ internal sealed class ReproSession : IDisposable
         if (firstRun)
         {
             Log.Ok("ready: " + exe);
+        }
+
+        if (_options.ProvisionOnly)
+        {
+            return true;
+        }
+
+        if (firstRun)
+        {
             Log.Step("launch");
         }
 
@@ -375,6 +407,40 @@ internal sealed class ReproSession : IDisposable
         return WinUiOverride.ForLocalPackage(path);
     }
 
+    /// <summary>
+    /// Works out which drop folder to use, in order: <c>--payload</c>, then the file's
+    /// <c>// payload:</c> header, then a <c>payload\</c> folder next to the exe.
+    /// <para>
+    /// An explicitly named folder that is missing is an error - it almost always means a
+    /// typo, and silently running stock bits while you believe you are testing a private
+    /// build is the worst possible failure. The default folder is allowed to be missing.
+    /// </para>
+    /// </summary>
+    private RunnerPayload? ResolvePayload(string? headerToken)
+    {
+        string? token = _options.Payload ?? headerToken;
+        if (token is not { Length: > 0 })
+        {
+            return RunnerPayload.FromDirectory(_layout.DefaultPayloadDir);
+        }
+
+        if (token.Equals("none", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        string path = Path.IsPathRooted(token)
+            ? token
+            : Path.GetFullPath(Path.Combine(Path.GetDirectoryName(_filePath)!, token));
+
+        if (!Directory.Exists(path))
+        {
+            throw new DirectoryNotFoundException("Payload folder not found: " + path);
+        }
+
+        return RunnerPayload.FromDirectory(path);
+    }
+
     private void StartWatching()
     {
         _debounce = new System.Threading.Timer(_ => _ = ReloadAsync(), null, Timeout.Infinite, Timeout.Infinite);
@@ -390,10 +456,51 @@ internal sealed class ReproSession : IDisposable
         _watcher.Created += (_, _) => Schedule();
         _watcher.Renamed += (_, _) => Schedule();
         _watcher.EnableRaisingEvents = true;
+
+        WatchPayloadFolder();
+    }
+
+    /// <summary>
+    /// Watches the drop folder too, so rebuilding a runtime DLL and copying it in
+    /// relaunches the repro without touching the .cs file.
+    /// </summary>
+    private void WatchPayloadFolder()
+    {
+        string? explicitDir = _options.Payload;
+        if (explicitDir is { Length: > 0 } && explicitDir.Equals("none", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        string dir = explicitDir is { Length: > 0 }
+            ? Path.GetFullPath(explicitDir)
+            : _layout.DefaultPayloadDir;
+
+        if (!Directory.Exists(dir))
+        {
+            return;
+        }
+
+        _payloadWatcher = new FileSystemWatcher(dir)
+        {
+            IncludeSubdirectories = true,
+            NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.FileName,
+        };
+
+        _payloadWatcher.Changed += (_, _) => SchedulePayload();
+        _payloadWatcher.Created += (_, _) => SchedulePayload();
+        _payloadWatcher.Deleted += (_, _) => SchedulePayload();
+        _payloadWatcher.Renamed += (_, _) => SchedulePayload();
+        _payloadWatcher.EnableRaisingEvents = true;
+
+        Log.Detail("watching " + dir);
     }
 
     /// <summary>Restarts the debounce, so a burst of events becomes one reload.</summary>
     private void Schedule() => _debounce?.Change(SaveDebounce, Timeout.InfiniteTimeSpan);
+
+    /// <summary>As <see cref="Schedule"/>, but waits long enough for a big file copy to finish.</summary>
+    private void SchedulePayload() => _debounce?.Change(PayloadDebounce, Timeout.InfiniteTimeSpan);
 
     private async Task ReloadAsync()
     {

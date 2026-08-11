@@ -16,6 +16,12 @@ public sealed class CliOptions
     /// <summary>WinUI override (a version or a local .nupkg), overriding <c>// winui:</c>.</summary>
     public string? WinUi { get; private set; }
 
+    /// <summary>
+    /// Folder of loose files to copy over the runner, overriding <c>// payload:</c>.
+    /// When not given, a <c>payload\</c> folder next to the exe is used if it has files.
+    /// </summary>
+    public string? Payload { get; private set; }
+
     /// <summary>Package identity, overriding <c>// packaged:</c>. Null when not given.</summary>
     public bool? Packaged { get; private set; }
 
@@ -24,6 +30,9 @@ public sealed class CliOptions
 
     /// <summary>Watch the file and re-push on save. On by default.</summary>
     public bool Watch { get; private set; } = true;
+
+    /// <summary>Prepare the runner but do not launch it, then exit.</summary>
+    public bool ProvisionOnly { get; private set; }
 
     /// <summary>List available Windows App SDK versions and exit.</summary>
     public bool List { get; private set; }
@@ -51,10 +60,18 @@ public sealed class CliOptions
                               newest 1.6). Overrides the file's "// wasdk:" header.
           --winui <ver|path>  Override just the WinUI component: a version, or the path to
                               a local .nupkg. Overrides "// winui:".
+          --payload <dir>     Copy every file in <dir> over the runner, after the Windows
+                              App SDK version is laid down. The quickest way to test a
+                              private build: drop Microsoft.ui.xaml.dll in and run.
+                              Defaults to a "payload" folder next to this exe.
+                              Overrides "// payload:".
           --packaged          Run the runner with package identity. Needs Developer Mode.
           --unpackaged        Force no package identity, even if the file asks for it.
           --prerelease        Include prerelease versions when resolving and listing.
           --no-watch          Launch and exit, instead of watching the file for saves.
+          --provision-only    Prepare the runner for the version asked for, then exit
+                              without launching. Warms the cache; also useful for
+                              building a bundle that runs with no network.
           --clear-cache       Delete provisioned runners first (downloads are kept).
           --list              List available Windows App SDK versions and exit.
           --doctor            Print environment diagnostics and exit.
@@ -122,6 +139,10 @@ public sealed class CliOptions
                 case "--no-watch":
                     options.Watch = false;
                     break;
+                case "--provision-only":
+                    options.ProvisionOnly = true;
+                    options.Watch = false;
+                    break;
                 case "--packaged":
                     options.Packaged = true;
                     break;
@@ -143,6 +164,14 @@ public sealed class CliOptions
                     }
 
                     options.WinUi = winui;
+                    break;
+                case "--payload":
+                    if (!TryTakeValue(args, ref i, out string? payload, out error))
+                    {
+                        return false;
+                    }
+
+                    options.Payload = payload;
                     break;
                 default:
                     if (arg.StartsWith('-'))

@@ -136,11 +136,14 @@ public sealed class RunnerProvisioner
     /// Copies the base runner, then overlays the version's WASDK runtime files. An
     /// optional <paramref name="winui"/> override swaps just the WinUI component for
     /// a different NuGet version or a local .nupkg, leaving the rest of WASDK alone.
+    /// An optional <paramref name="payload"/> copies loose local files over the lot,
+    /// which is the quickest way to test a private build of any runtime binary.
     /// </summary>
     public async Task<string> EnsureRunnerAsync(
         string version,
         string baseRunnerDir,
         WinUiOverride? winui = null,
+        RunnerPayload? payload = null,
         IProgress<ProvisionProgress>? progress = null,
         CancellationToken ct = default)
     {
@@ -148,20 +151,39 @@ public sealed class RunnerProvisioner
         ArgumentNullException.ThrowIfNull(baseRunnerDir);
 
         string folderName = winui is null ? version : $"{version}__{winui.CacheKey}";
+        if (payload is not null)
+        {
+            // A separate folder, so runs without a payload keep using untouched stock
+            // bits. The name is fixed rather than per-fingerprint: dropping in a new
+            // build should replace the previous one, not leave a 350 MB folder behind
+            // for every iteration.
+            folderName += "+payload";
+        }
+
         string dest = Path.Combine(_versionsRoot, folderName);
         string exe = Path.Combine(dest, "ReproStudio.Runner.exe");
         if (File.Exists(exe))
         {
-            if (!IsBaseRunnerNewer(baseRunnerDir, dest))
+            if (!RunnerPayload.Matches(dest, payload))
+            {
+                // Overlaid files cannot be un-overlaid in place - restoring a stock DLL
+                // would mean knowing what it used to be - so a changed payload rebuilds
+                // the folder. Downloads are cached, so this is local copying only.
+                Report(progress, "Payload changed, re-provisioning...");
+                DeleteWithRetry(dest);
+            }
+            else if (IsBaseRunnerNewer(baseRunnerDir, dest))
+            {
+                // The runner was rebuilt after this folder was provisioned. Without this,
+                // a runner fix never reaches versions provisioned earlier - they keep
+                // serving the old binary forever, and the bug looks like it came back.
+                Report(progress, $"Base runner changed, re-provisioning {version}...");
+                DeleteWithRetry(dest);
+            }
+            else
             {
                 return exe;
             }
-
-            // The runner was rebuilt after this folder was provisioned. Without this,
-            // a runner fix never reaches versions provisioned earlier - they keep
-            // serving the old binary forever, and the bug looks like it came back.
-            Report(progress, $"Base runner changed, re-provisioning {version}...");
-            DeleteWithRetry(dest);
         }
 
         string staging = dest + ".staging";
@@ -209,6 +231,13 @@ public sealed class RunnerProvisioner
         if (winui is not null)
         {
             await ApplyWinUiOverrideAsync(winui, staging, progress, ct);
+        }
+
+        if (payload is not null)
+        {
+            // Last, so a dropped file beats both the stock component and any WinUI override.
+            Report(progress, $"Applying {payload.RelativePaths.Count} file(s) from {payload.Directory}...");
+            payload.ApplyTo(staging);
         }
 
         // Atomic-ish swap: stage fully, then move into place.
