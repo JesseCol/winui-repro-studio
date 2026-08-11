@@ -35,12 +35,27 @@
 .PARAMETER OutputRoot
     Where to put the staged folder and zip. Defaults to artifacts\ next to this script.
 
+.PARAMETER LocalWinUi
+    Path to a .nupkg from tools\pack-local-winui.ps1, wrapping a private WinUI build.
+    Stages it into local-winui\ and writes run-fixed.cmd / run-stock.cmd so the bundle
+    can be run either way. Implies -Preprovision.
+
+.PARAMETER Preprovision
+    Windows App SDK versions to bake into a cache\ folder inside the bundle, so the
+    target machine needs no internet. Slow and large, but the only way to run on a
+    machine that is offline or firewalled off from NuGet.
+
 .PARAMETER NoZip
     Stage the folder but skip the zip.
 
 .EXAMPLE
     .\pack.ps1
     .\pack.ps1 -Platform ARM64
+
+.EXAMPLE
+    # Offline bundle for testing a private WinUI build on a machine with no network.
+    $pkg = .\tools\pack-local-winui.ps1 -Source D:\winui\BuildOutput\bin\amd64chk\Product
+    .\pack.ps1 -LocalWinUi $pkg -Preprovision 2.3.1
 #>
 [CmdletBinding()]
 param(
@@ -52,6 +67,10 @@ param(
 
     [string] $OutputRoot,
 
+    [string] $LocalWinUi,
+
+    [string[]] $Preprovision,
+
     [switch] $NoZip
 )
 
@@ -60,6 +79,19 @@ Set-StrictMode -Version Latest
 
 $repoRoot = $PSScriptRoot
 if (-not $OutputRoot) { $OutputRoot = Join-Path $repoRoot 'artifacts' }
+
+if ($LocalWinUi) {
+    if (-not (Test-Path -LiteralPath $LocalWinUi -PathType Leaf)) {
+        throw "No such WinUI package: $LocalWinUi. Build one with tools\pack-local-winui.ps1."
+    }
+    $LocalWinUi = (Resolve-Path -LiteralPath $LocalWinUi).Path
+
+    # A local WinUI build is only worth shipping if it is ready to run. Provisioning it
+    # on the target machine would need the network the offline bundle exists to avoid.
+    if (-not $Preprovision) {
+        throw '-LocalWinUi needs -Preprovision <version>, naming the Windows App SDK version to overlay it onto.'
+    }
+}
 
 $rid = 'win-' + $Platform.ToLowerInvariant()
 $cliProject = Join-Path $repoRoot 'src\ReproStudio.Cli\ReproStudio.Cli.csproj'
@@ -100,6 +132,26 @@ function Measure-Tree([string] $path) {
     $files = Get-ChildItem -Path $path -Recurse -File
     $bytes = ($files | Measure-Object -Property Length -Sum).Sum
     return '{0:N0} files, {1:N0} MB' -f $files.Count, ($bytes / 1MB)
+}
+
+function Write-CmdLauncher([string] $path, [string] $version, [string] $extra, [string] $what) {
+    $name = Split-Path -Leaf $path
+
+    # %~dp0 keeps every path relative to the bundle, so it runs from any folder, and
+    # REPROSTUDIO_CACHE points at the cache staged beside it - no download, no network.
+    $body = @"
+@echo off
+rem Runs a repro against $what.
+rem   $name samples\hello.cs
+setlocal
+set "REPROSTUDIO_CACHE=%~dp0cache"
+if "%~1"=="" (
+    echo usage: $name ^<file.cs^> [options]
+    exit /b 1
+)
+"%~dp0ReproStudio.exe" %* --wasdk $version$extra
+"@
+    Set-Content -Path $path -Value $body -Encoding ascii
 }
 
 # A running runner holds a lock on its own exe, which makes the build fail with a
@@ -151,17 +203,178 @@ Copy-Tree $cliOut $stage
 Copy-Tree $runnerOut (Join-Path $stage 'runner-base')
 Copy-Tree (Join-Path $repoRoot 'samples') (Join-Path $stage 'samples')
 
+# An empty drop folder, always. ReproStudio.exe looks for "payload" next to itself,
+# so shipping the folder pre-made turns "test a private build on this machine" into
+# copying a DLL in - nothing to read, nothing to configure. The README is what the
+# person who unzips this actually finds, so it has to stand on its own. .txt is
+# ignored when the payload is read, so this file never counts as content.
+$payloadDir = Join-Path $stage 'payload'
+New-Item -ItemType Directory -Path $payloadDir -Force | Out-Null
+Set-Content -Path (Join-Path $payloadDir 'README.txt') -Encoding ascii -Value @'
+Drop files here to test a private build.
+
+Anything in this folder is copied over the Windows App SDK runtime, after the
+version is laid down, so a file here beats the stock file of the same name.
+The usual case is one DLL:
+
+    payload\Microsoft.ui.xaml.dll
+
+Then run a repro as normal:
+
+    ReproStudio.exe samples\hello.cs
+
+The console prints which files it picked up. Subfolders work too and keep their
+relative paths, so payload\Microsoft.UI.Xaml\ overlays the themes directory.
+
+To run stock while files are sitting here, pass --payload none:
+
+    ReproStudio.exe samples\hello.cs --payload none
+
+Always take a stock reading before you trust a payload reading. If the harness
+was broken, both readings are worthless, and only the stock one tells you that.
+
+Nothing here is validated. A binary that does not load makes the runner fail to
+start, and it will say so. .txt and .md files (like this one) are ignored.
+'@
+
+
+# --- optional: a local WinUI build, and a cache that makes the bundle run offline ---
+
+$stagedWinUi = $null
+$stagedWinUiFull = $null
+if ($LocalWinUi) {
+    $winuiDir = Join-Path $stage 'local-winui'
+    New-Item -ItemType Directory -Path $winuiDir -Force | Out-Null
+    Copy-Item -LiteralPath $LocalWinUi -Destination $winuiDir -Force
+    # Relative, because the bundle gets copied somewhere else and an absolute path
+    # baked into run-fixed.cmd would point at this machine.
+    $stagedWinUi = 'local-winui\' + (Split-Path -Leaf $LocalWinUi)
+    $stagedWinUiFull = Join-Path $winuiDir (Split-Path -Leaf $LocalWinUi)
+    Write-Host "  local WinUI: $stagedWinUi" -ForegroundColor DarkGray
+}
+
+if ($Preprovision) {
+    $cacheDir = Join-Path $stage 'cache'
+    $stagedExe = Join-Path $stage 'ReproStudio.exe'
+    # Any repro will do: provisioning only depends on the version, not the content.
+    $seed = Join-Path $stage 'samples\hello.cs'
+    if (-not (Test-Path $seed)) { throw "Cannot pre-provision: $seed is missing." }
+
+    foreach ($version in $Preprovision) {
+        # Both flavours, so the bundle can show the stock behaviour next to the local
+        # build's. A fix you cannot compare against the bug it fixes proves nothing.
+        # Absolute path here: a relative --winui resolves against the repro file, not
+        # the working directory, and the seed repro lives one folder down in samples\.
+        $variants = New-Object System.Collections.ArrayList
+        $null = $variants.Add(@())
+        if ($stagedWinUiFull) { $null = $variants.Add(@('--winui', $stagedWinUiFull)) }
+
+        foreach ($variant in $variants) {
+            $label = if ($variant.Count -gt 0) { "$version + local WinUI" } else { $version }
+            Write-Host "  Pre-provisioning $label..." -ForegroundColor DarkGray
+
+            $runArgs = @($seed, '--wasdk', $version, '--provision-only') + $variant
+            # REPROSTUDIO_CACHE only for this child process, so packing never disturbs
+            # the packer's own cache.
+            $previous = $env:REPROSTUDIO_CACHE
+            $env:REPROSTUDIO_CACHE = $cacheDir
+            try { & $stagedExe @runArgs | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray } }
+            finally { $env:REPROSTUDIO_CACHE = $previous }
+
+            if ($LASTEXITCODE -ne 0) { throw "Pre-provisioning $label failed." }
+        }
+    }
+
+    # nupkgs\ is the download staging area and local-winui\ holds unpacked overrides.
+    # Both are inputs that have already been consumed; versions\ is the payload.
+    foreach ($intermediate in @('nupkgs', 'local-winui')) {
+        $path = Join-Path $cacheDir $intermediate
+        if (Test-Path $path) { Remove-Item $path -Recurse -Force }
+    }
+
+    Write-Host ("  cache: " + (Measure-Tree $cacheDir)) -ForegroundColor DarkGray
+
+    # --payload none matters here. Without it, a DLL dropped into payload\ would be
+    # picked up by the stock launcher too, and the "stock" half of the comparison
+    # would quietly be the private build. A stock reading that is not stock is worse
+    # than no reading, because nothing about it looks wrong.
+    Write-CmdLauncher (Join-Path $stage 'run-stock.cmd') $Preprovision[0] `
+        ' --payload none' ('stock Windows App SDK ' + $Preprovision[0])
+
+    if ($stagedWinUi) {
+        Write-CmdLauncher (Join-Path $stage 'run-fixed.cmd') $Preprovision[0] `
+            " --winui `"%~dp0$stagedWinUi`" --payload none" 'the local WinUI build'
+    }
+
+    # Runs whatever is in payload\, on top of the same pinned version, so a dropped
+    # DLL is directly comparable with run-stock.cmd.
+    Write-CmdLauncher (Join-Path $stage 'run-payload.cmd') $Preprovision[0] `
+        " --payload `"%~dp0payload`"" 'the files in payload\'
+}
+
 # The bundle root is ~200 loose DLLs. Leave a note so whoever unzips it on a test
-# machine isn't left guessing which file to run.
+# machine isn't left guessing which file to run. An offline bundle is a different
+# thing to explain than a plain one, so the variable parts are built up first.
+if ($Preprovision) {
+    $runLines = @(
+        '    run-stock.cmd   samples\hello.cs   <- stock Windows App SDK ' + $Preprovision[0]
+        '    run-payload.cmd samples\hello.cs   <- the same, plus whatever is in payload\'
+    )
+    if ($stagedWinUi) {
+        $runLines = @(
+            '    run-stock.cmd   samples\hello.cs   <- stock Windows App SDK ' + $Preprovision[0]
+            '    run-fixed.cmd   samples\hello.cs   <- the same, with the local WinUI build'
+            '    run-payload.cmd samples\hello.cs   <- the same, plus whatever is in payload\'
+        )
+    }
+
+    $howToRun = ($runLines -join "`n") + @"
+
+
+Use those rather than ReproStudio.exe directly. They point the cache at the copy
+of it in this folder, which is what lets this run with no internet.
+"@
+
+    $needs = @"
+  - Nothing else. Windows App SDK $($Preprovision -join ', ') is already unpacked in
+    cache\, so there is nothing to download.
+"@
+
+    $cacheNote = @'
+This bundle carries its own cache\ folder. The run-*.cmd files point at it, so
+nothing is downloaded and nothing is written outside this folder.
+'@
+}
+else {
+    $howToRun = '    ReproStudio.exe samples\hello.cs'
+
+    $needs = @'
+  - Internet. Windows App SDK versions are downloaded from NuGet the first time
+    you ask for one, then cached.
+'@
+
+    $cacheNote = @'
+Downloads and provisioned runners go to %LOCALAPPDATA%\winui-repro-app.
+Set REPROSTUDIO_CACHE to put them somewhere else.
+'@
+}
+
 $readme = @"
 ReproStudio - portable build
 
 Run a repro:
 
-    ReproStudio.exe samples\hello.cs
+$howToRun
 
 It watches the file, so every save refreshes the preview. Ctrl+C stops it.
 Try samples\full-header.cs to see every option a repro file can set.
+
+Testing a private build:
+
+    Copy the DLL into payload\ and run again. Anything in that folder is copied
+    over the Windows App SDK runtime, so it beats the stock file of the same
+    name. See payload\README.txt. Take a stock reading first, so you can tell
+    a real difference from a broken harness.
 
 If something doesn't work, start here:
 
@@ -174,16 +387,13 @@ All options:
 What you need on this machine:
 
   - Windows 10 1809 (build 17763) or newer.
-  - Internet. Windows App SDK versions are downloaded from NuGet the first time
-    you ask for one, then cached.
+$needs
   - Developer Mode, but ONLY for repros using "// packaged: yes".
     Settings > Privacy & security > For developers.
 
 You do NOT need a dev SDK, .NET, or the Windows App SDK runtime installed.
 
-Downloads and provisioned runners go to %LOCALAPPDATA%\winui-repro-app.
-Set REPROSTUDIO_CACHE to put them somewhere else.
-
+$cacheNote
 Careful: a repro file's C# is compiled and run for real, with no sandbox. Only
 run repros you trust.
 "@
@@ -202,4 +412,15 @@ if (-not $NoZip) {
 }
 
 Write-Host 'Done.' -ForegroundColor Green
-Write-Host '  Unzip on the target machine, then: ReproStudio.exe samples\hello.cs' -ForegroundColor DarkGray
+if ($stagedWinUi) {
+    Write-Host '  Copy the folder to the target machine, then:' -ForegroundColor DarkGray
+    Write-Host '    run-stock.cmd samples\hello.cs   (stock)' -ForegroundColor DarkGray
+    Write-Host '    run-fixed.cmd samples\hello.cs   (local WinUI build)' -ForegroundColor DarkGray
+}
+elseif ($Preprovision) {
+    Write-Host '  Copy the folder to the target machine, then: run-stock.cmd samples\hello.cs' -ForegroundColor DarkGray
+}
+else {
+    Write-Host '  Unzip on the target machine, then: ReproStudio.exe samples\hello.cs' -ForegroundColor DarkGray
+}
+Write-Host '  To test a private build there, drop the DLL into payload\.' -ForegroundColor DarkGray
