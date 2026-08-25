@@ -385,6 +385,10 @@ class Repro
 }
 ```
 
+The `class Repro { }` wrapper is required. The snippet is compiled as a library,
+so top-level statements fail with `CS8805`, and a compile error means no window
+and no output - it just looks like nothing happened.
+
 Every header key is optional, and order doesn't matter. Two kinds of keys:
 
 - **Live** (`theme`, `flow`, `background`, `topmost`) and the XAML/C# itself: a

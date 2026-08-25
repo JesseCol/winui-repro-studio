@@ -55,6 +55,25 @@ dotnet build .\src\ReproStudio.Cli\ReproStudio.Cli.csproj -c Debug -p:Platform=x
   MSBuild's upward search from finding an unrelated parent props file.
 - There are no tests. Verify by running it.
 
+**To test a Runner change, run `pack.ps1` and run from the bundle.** A plain
+`dotnet build` is not enough. The exe in `bin\` finds no `runner-base` beside
+itself, so it falls back to the cache copy at
+`%LOCALAPPDATA%\winui-repro-app\runner-base` - and **nothing refreshes that
+copy**. `pack.ps1` refreshes the bundle's `runner-base`; `dotnet build` writes
+only to `bin\`. So the cache copy stays at whatever date it was seeded.
+
+The console prints which one it picked, so check it:
+
+```
+runner    ...\artifacts\ReproStudio-x64\runner-base  (portable)   <- fresh
+runner    ...\AppData\Local\winui-repro-app\runner-base  (dev)    <- may be old
+```
+
+This is not the same as the version-folder self-heal. That compares each
+provisioned copy against the base and re-provisions on mismatch, so it cannot
+help when the base itself is stale. It has already burned one session: a working
+feature looked completely broken, with no window, no error, and no log.
+
 ## Packing
 
 ```powershell
@@ -105,6 +124,16 @@ Harnesses and their findings go in `investigations\<bug>\`, not `samples\`.
 
 Traps that look like the tool is broken:
 
+- **Everything must live inside a class.** The snippet is compiled as a library,
+  so top-level statements fail with `CS8805: Program using top-level statements
+  must be an executable`. Wrap it:
+  ```csharp
+  class Repro
+  {
+      const string Xaml = """<Grid/>""";
+      static void Setup(FrameworkElement root) { }
+  }
+  ```
 - **The `const string Xaml = """..."""` literal is mandatory.** Without it the
   console prints `! No 'string Xaml = ...' literal found` and `Setup` is never
   called.
