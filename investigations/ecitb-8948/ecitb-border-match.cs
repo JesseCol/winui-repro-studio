@@ -163,6 +163,9 @@ class Repro
     [DllImport("user32.dll")]
     private static extern IntPtr GetForegroundWindow();
 
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
+    private static extern IntPtr GetWindowLongPtr(IntPtr hwnd, int index);
+
     // The visible frame, excluding the invisible resize border that GetWindowRect
     // includes. Without this the "border" reads as whatever is behind the window,
     // because the outermost pixels of GetWindowRect are not drawn at all.
@@ -437,6 +440,11 @@ class Repro
         w.Activate();
 
         IntPtr hwnd = WindowNative.GetWindowHandle(w);
+        const int GwlExStyle = -20;
+        const long WsExNoRedirectionBitmap = 0x00200000;
+        long exStyle = GetWindowLongPtr(hwnd, GwlExStyle).ToInt64();
+        note += $", exStyle=0x{exStyle:X8}, noRedirection={((exStyle & WsExNoRedirectionBitmap) != 0)}";
+
         const uint SwpNoMove = 0x0002, SwpNoSize = 0x0001, SwpNoActivate = 0x0010;
         SetWindowPos(hwnd, HwndTopmost, 0, 0, 0, 0, SwpNoMove | SwpNoSize | SwpNoActivate);
 
@@ -618,24 +626,17 @@ class Repro
                 {
                     Reading? r = Readings.Find(x => x.Window == subject.Title
                         && x.Backdrop == backdrop.Name && x.Active == active);
-                    if (r?.Top is null || r.Left is null || r.Right is null || r.Bottom is null)
+                    if (r?.TopRaw is null || r.ContentDepth is null
+                        || r.Left is null || r.Right is null || r.Bottom is null)
                     {
                         continue;
                     }
 
-                    anyJudged = true;
-
-                    // The outermost pixel is the border itself. Compare the top's to the
-                    // three sides', because that is the thing a user sees as "an even
-                    // border" or "an odd line along the top".
-                    uint top = r.Top[0];
                     uint left = r.Left[0];
                     uint right = r.Right[0];
                     uint bottom = r.Bottom[0];
 
                     bool sidesAgree = Near(left, right) && Near(left, bottom);
-                    bool topAgrees = Near(top, left) && Near(top, right) && Near(top, bottom);
-
                     string state = active ? "active" : "inactive";
                     if (!sidesAgree)
                     {
@@ -644,16 +645,41 @@ class Repro
                             + $"(left {Hex(left)}, right {Hex(right)}, bottom {Hex(bottom)}), "
                             + "so there is no single border colour to compare the top against.");
                         allMatch = false;
+                        continue;
                     }
-                    else if (topAgrees)
+
+                    // AppWindow owns its caption-button block. Do not mistake those pixels
+                    // for the app-owned part of the custom title bar. At sample positions
+                    // where app content starts at depth 0 or 1, however, ECITB must reserve
+                    // exactly one frame row and that row must match the native side borders.
+                    var samples = new List<string>();
+                    bool readingMatches = true;
+                    for (int i = 0; i < AlongEdge.Length; i++)
                     {
-                        lines.Add($"{subject.Title} / {backdrop.Name} / {state}: MATCH - top "
-                            + $"{Hex(top)} vs sides {Hex(left)}/{Hex(right)}/{Hex(bottom)}.");
+                        int contentDepth = r.ContentDepth[i];
+                        if (contentDepth < 0 || contentDepth > 1) { continue; }
+
+                        anyJudged = true;
+                        uint top = r.TopRaw[i];
+                        bool sampleMatches = contentDepth == 1
+                            && Near(top, left) && Near(top, right) && Near(top, bottom);
+                        readingMatches &= sampleMatches;
+                        samples.Add($"{AlongEdge[i] * 100:0}% depth={contentDepth}px top={Hex(top).Trim()}");
+                    }
+
+                    if (samples.Count == 0) { continue; }
+
+                    if (readingMatches)
+                    {
+                        lines.Add($"{subject.Title} / {backdrop.Name} / {state}: MATCH - "
+                            + $"{string.Join(", ", samples)} vs sides "
+                            + $"{Hex(left)}/{Hex(right)}/{Hex(bottom)}.");
                     }
                     else
                     {
-                        lines.Add($"{subject.Title} / {backdrop.Name} / {state}: DIFFERS - top "
-                            + $"{Hex(top)} vs sides {Hex(left)}/{Hex(right)}/{Hex(bottom)}.");
+                        lines.Add($"{subject.Title} / {backdrop.Name} / {state}: DIFFERS - "
+                            + $"{string.Join(", ", samples)} vs sides "
+                            + $"{Hex(left)}/{Hex(right)}/{Hex(bottom)}.");
                         allMatch = false;
                     }
                 }
@@ -694,8 +720,8 @@ class Repro
         string headline = !anyJudged
             ? "inconclusive: no edge could be read. The windows are probably covered, or the desktop is locked."
             : allMatch
-                ? "PASS - every extend-into-title-bar window's top edge matches its own native side borders, on both backdrops and in both focus states."
-                : "DIFFERS - at least one top edge does not match that window's own native side borders. See the lines below.";
+                ? "PASS - every app-owned ECITB top edge reserves one row that matches its native side borders, on both backdrops and in both focus states."
+                : "DIFFERS - at least one app-owned ECITB top edge is missing its reserved row or does not match its native side borders. See the lines below.";
 
         Report(root, headline + "\n" + string.Join("\n", lines), anyJudged && allMatch,
             detail.ToString());

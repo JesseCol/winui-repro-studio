@@ -74,6 +74,25 @@ Three things fall out of that:
 The control window **passes** the border-match test. That's the instrument
 validating itself: if the control had failed, the harness would be wrong.
 
+## No-redirection host prototype
+
+A candidate WinUI build changed its composition-host HWND to
+`WS_EX_NOREDIRECTIONBITMAP`, retained the one-pixel XAML bridge offset, and
+extended the full top DWM frame. It did not use buffered GDI alpha painting.
+
+The harness now records the live extended style and judges only app-owned title
+bar positions. It excludes the AppWindow-owned caption-button block, while
+still requiring app content to begin exactly one pixel below the top edge.
+
+| Build | Host style | Window API | AppWindow API | Entry points |
+|---|---|---|---|---|
+| Stock WASDK 2.3.1 | `noRedirection=False` | top row is opaque white | no reserved row over app content | do not converge |
+| Candidate | `noRedirection=True` | native row matches sides | native row matches sides | converge |
+
+The candidate passed over `#01204D` and `#E07A00` backdrops, active and
+inactive. The direct AppWindow path still reports a 32-pixel content depth in
+the caption-button sample, which is expected because AppWindow owns that area.
+
 ## Native Win10 border blend
 
 Fitting `edge = a * background + k` per channel. All three channels agreed to
@@ -88,7 +107,7 @@ within 1/255, which is what makes these numbers worth writing down.
 The prototype's top row has the alpha of an **active** border and the tint of an
 **inactive** one. Close, not matching.
 
-## The DWM-glass prototype: blocked on a version mismatch
+## Earlier DWM-glass prototype: blocked on a version mismatch
 
 A candidate fix (a private build of `Microsoft.ui.xaml.dll` overlaid on WASDK
 2.3.1) crashes on Windows 10 1809:
