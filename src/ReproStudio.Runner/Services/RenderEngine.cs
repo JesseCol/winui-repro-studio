@@ -20,10 +20,18 @@ public sealed class RenderResult
 
     public string? Error { get; init; }
 
+    public string? Diagnostic { get; init; }
+
     public static RenderResult Ok(object root) => new() { Success = true, Root = root };
 
-    public static RenderResult Fail(string phase, string error) =>
-        new() { Success = false, Phase = phase, Error = error };
+    public static RenderResult Fail(string phase, string error, string? diagnostic = null) =>
+        new()
+        {
+            Success = false,
+            Phase = phase,
+            Error = error,
+            Diagnostic = diagnostic ?? error,
+        };
 }
 
 /// <summary>
@@ -49,7 +57,7 @@ public sealed class RenderEngine
         catch (Exception ex)
 #pragma warning restore CA1031
         {
-            return RenderResult.Fail("xaml", ex.Message);
+            return RenderResult.Fail("xaml", DescribeException(ex), ex.ToString());
         }
 
         if (string.IsNullOrWhiteSpace(snippet.CSharp))
@@ -71,7 +79,8 @@ public sealed class RenderEngine
         catch (Exception ex)
 #pragma warning restore CA1031
         {
-            return RenderResult.Fail("runtime", (ex.InnerException ?? ex).Message);
+            Exception actual = ex.InnerException ?? ex;
+            return RenderResult.Fail("runtime", DescribeException(actual), actual.ToString());
         }
 
         return RenderResult.Ok(root);
@@ -108,5 +117,11 @@ public sealed class RenderEngine
             setup.Invoke(null, args);
             return;
         }
+    }
+
+    private static string DescribeException(Exception ex)
+    {
+        string message = string.IsNullOrWhiteSpace(ex.Message) ? "(no message)" : ex.Message;
+        return $"{ex.GetType().FullName} (HRESULT 0x{ex.HResult:X8}): {message}";
     }
 }

@@ -258,6 +258,9 @@ public sealed class MainWindow : Window
             }
             else
             {
+                CrashLog.Log(
+                    $"Render failed ({result.Phase}): "
+                    + (result.Diagnostic ?? result.Error ?? "Unknown error."));
                 ShowError(result.Phase, result.Error);
             }
         }
