@@ -96,6 +96,12 @@ public sealed class CliOptions
             // topmost:    yes | no
 
           The markup goes in a "string Xaml = ..." literal so the file stays valid C#.
+          For CLI-only setup before XAML initializes, add:
+
+            static void OnProcessLaunch()
+            {
+                EnableXamlOptionalChange(63530879);
+            }
 
         examples:
           ReproStudio bug.cs

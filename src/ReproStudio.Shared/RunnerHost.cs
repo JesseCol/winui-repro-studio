@@ -55,7 +55,8 @@ public sealed class RunnerHost : IDisposable
     public async Task<LaunchResult> LaunchAsync(
         string exePath,
         (int X, int Y, int Width, int Height)? bounds,
-        bool packaged)
+        bool packaged,
+        bool runProcessLaunch = false)
     {
         ArgumentNullException.ThrowIfNull(exePath);
 
@@ -65,7 +66,7 @@ public sealed class RunnerHost : IDisposable
             return new LaunchResult(false, string.Empty);
         }
 
-        List<string> args = BuildArgs(bounds);
+        List<string> args = BuildArgs(bounds, runProcessLaunch);
 
         if (packaged)
         {
@@ -148,9 +149,16 @@ public sealed class RunnerHost : IDisposable
         return _process is not null;
     }
 
-    private List<string> BuildArgs((int X, int Y, int Width, int Height)? bounds)
+    private List<string> BuildArgs(
+        (int X, int Y, int Width, int Height)? bounds,
+        bool runProcessLaunch)
     {
         var args = new List<string> { "--request", _requestPath };
+        if (runProcessLaunch)
+        {
+            args.Add("--run-process-launch");
+        }
+
         if (bounds is (int x, int y, int width, int height))
         {
             args.Add("--bounds");

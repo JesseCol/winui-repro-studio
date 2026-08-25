@@ -392,6 +392,30 @@ Every header key is optional, and order doesn't matter. Two kinds of keys:
 - **Launch-time** (`wasdk`, `winui`, `payload`, `packaged`, `dpi`): these pick
   which Runner exe runs and how, so a change re-provisions and relaunches.
 
+### Run code before XAML starts (CLI)
+
+The console host recognizes one optional launch-time hook:
+
+```csharp
+static void OnProcessLaunch()
+{
+    EnableXamlOptionalChange(63530879);
+}
+```
+
+The CLI compiles and invokes this parameterless `static void` method before
+`Application.Start`, so it can configure process-wide state that must be set before
+XAML initializes. `EnableXamlOptionalChange` takes the numeric `XamlChangeId`, which
+also works when the runner's pinned managed projection predates that enum member.
+
+Changing `OnProcessLaunch` changes the CLI's launch plan and restarts the Runner.
+Edits elsewhere, including XAML and `Setup`, still update the existing process.
+The hook is compiled separately from `Setup`, so use it for process-wide/native
+configuration rather than managed static state that `Setup` expects to read. Keep
+the exact block-bodied `static void OnProcessLaunch()` shape and keep its launch
+configuration self-contained: only this method's text is fingerprinted, so changing
+a helper or constant outside it does not trigger a relaunch.
+
 ### You don't have to type the whole WASDK version
 
 `wasdk: 1.7` is enough. It matches your text against the real version list by
@@ -683,6 +707,12 @@ the same request file." No rebuild. Nice and dumb.
 A `Snippet` carries some XAML and optional C#. The Runner turns it into live UI
 in `RenderEngine.Render`:
 
+**0. CLI launch hook.** When the file has a parameterless
+`static void OnProcessLaunch()`, the console host tells the Runner to compile and
+invoke it before `Application.Start`. Changing that method relaunches the process.
+Because this happens before a window exists, hook compile or runtime failures are
+written to `runner.log`; watch mode notices the exited process and prints that log.
+
 **1. XAML -> tree.** The XAML string is parsed at runtime with `XamlReader.Load`.
 There's no compiled XAML anywhere in the Runner (more on that below), so the
 Runner's `App` implements `IXamlMetadataProvider` by hand. That's what lets
@@ -716,9 +746,10 @@ static void Setup(FrameworkElement root, Window win) { ... }
 
 `root` is the parsed XAML tree, so your C# can find elements and hook up events.
 
-Any failure is tagged by phase (`xaml`, `csharp-compile`, or `runtime`) and shown
-in an InfoBar instead of taking down the Runner. Compile errors even get their
-line numbers fixed up so they match your snippet, not the prepended usings.
+Any failure is tagged by phase (`xaml`, `csharp-compile`, or `runtime`), shown
+in an InfoBar, and appended with full diagnostics to
+`%TEMP%\winui-repro-app\runner.log`. Compile errors even get their line numbers
+fixed up so they match your snippet, not the prepended usings.
 
 If the Runner dies before it can show anything, it writes the exception to
 `%TEMP%\winui-repro-app\runner.log`. The console host notices the process is gone

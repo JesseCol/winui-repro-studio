@@ -76,11 +76,18 @@ internal sealed class ReproSession : IDisposable
     /// null when a WinUI package is standing on its own: the package's declared dependencies
     /// pick the stack, so there is no Windows App SDK version to name.
     /// </summary>
-    private readonly record struct LaunchPlan(string? Version, string WinUiKey, string PayloadKey, bool Packaged, int Dpi)
+    private readonly record struct LaunchPlan(
+        string? Version,
+        string WinUiKey,
+        string PayloadKey,
+        string ProcessLaunchKey,
+        bool Packaged,
+        int Dpi)
     {
         public string Describe() => (Version ?? "winui-only")
             + (WinUiKey.Length == 0 ? string.Empty : " + winui " + WinUiKey)
             + (PayloadKey.Length == 0 ? string.Empty : " + payload " + PayloadKey)
+            + (ProcessLaunchKey.Length == 0 ? string.Empty : " + process launch hook")
             + (Packaged ? " (packaged)" : string.Empty);
     }
 
@@ -186,6 +193,7 @@ internal sealed class ReproSession : IDisposable
                 version,
                 winui?.CacheKey ?? string.Empty,
                 payload?.Fingerprint ?? string.Empty,
+                parsed.ProcessLaunchKey,
                 _options.Packaged ?? parsed.Packaged ?? false,
                 parsed.Dpi ?? 100);
         }
@@ -282,7 +290,13 @@ internal sealed class ReproSession : IDisposable
 
         _logOffset = CurrentRunnerLogLength();
 
-        RunnerHost.LaunchResult result = await _host.LaunchAsync(exe, bounds: null, plan.Packaged).ConfigureAwait(false);
+        RunnerHost.LaunchResult result = await _host
+            .LaunchAsync(
+                exe,
+                bounds: null,
+                plan.Packaged,
+                runProcessLaunch: plan.ProcessLaunchKey.Length > 0)
+            .ConfigureAwait(false);
         if (!result.Launched)
         {
             Log.Error("The runner did not start." + result.ModeNote);

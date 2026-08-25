@@ -5,6 +5,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Markup;
 using Microsoft.UI.Xaml.XamlTypeInfo;
+using ReproStudio.Shared;
 using ReproStudio_Runner.Services;
 
 namespace ReproStudio_Runner;
@@ -20,6 +21,21 @@ public static class Program
     private static void Main()
     {
         WinRT.ComWrappersSupport.InitializeComWrappers();
+        string[] commandLine = Environment.GetCommandLineArgs();
+        if (HasArgument(commandLine, "--run-process-launch"))
+        {
+            try
+            {
+                ProcessLaunchEngine.Run(App.ParseRequestPath(commandLine)!);
+            }
+            catch (Exception ex)
+            {
+                CrashLog.Log($"{ProcessLaunchMethod.Name} failed: {ex}");
+                Environment.ExitCode = 1;
+                return;
+            }
+        }
+
         Application.Start((p) =>
         {
             var context = new DispatcherQueueSynchronizationContext(DispatcherQueue.GetForCurrentThread());
@@ -27,6 +43,9 @@ public static class Program
             _ = new App();
         });
     }
+
+    private static bool HasArgument(string[] args, string value) =>
+        args.Any(arg => string.Equals(arg, value, StringComparison.OrdinalIgnoreCase));
 }
 
 /// <summary>
@@ -75,7 +94,7 @@ public partial class App : Application, IXamlMetadataProvider
         _window.Activate();
     }
 
-    private static string? ParseRequestPath(string[] args)
+    internal static string? ParseRequestPath(string[] args)
     {
         for (int i = 0; i < args.Length - 1; i++)
         {

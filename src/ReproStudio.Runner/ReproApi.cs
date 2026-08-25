@@ -1,4 +1,5 @@
 using System;
+using ReproStudio_Runner.Services;
 
 namespace ReproStudio_Runner;
 
@@ -12,4 +13,11 @@ public static class ReproApi
     public static Action<string>? LogSink { get; set; }
 
     public static void Log(string message) => LogSink?.Invoke(message ?? string.Empty);
+
+    /// <summary>
+    /// Enables a numeric XAML optional change before XAML initialization. Call this
+    /// from the CLI-only <c>OnProcessLaunch</c> hook.
+    /// </summary>
+    public static void EnableXamlOptionalChange(int changeId) =>
+        XamlOptionalChangesInterop.EnableChange(changeId);
 }

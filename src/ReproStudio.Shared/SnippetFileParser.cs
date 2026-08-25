@@ -61,6 +61,12 @@ public sealed class ParsedSnippetFile
     /// <summary>The whole file, handed to the runner as C# exactly as today.</summary>
     public string CSharp { get; init; } = string.Empty;
 
+    /// <summary>
+    /// Fingerprint of <c>OnProcessLaunch</c>, or empty when absent. The CLI includes
+    /// this in its launch plan so changing the hook restarts the runner.
+    /// </summary>
+    public string ProcessLaunchKey { get; init; } = string.Empty;
+
     /// <summary>True when a <c>string Xaml</c> literal was found (even if empty).</summary>
     public bool HasXaml { get; init; }
 }
@@ -107,6 +113,7 @@ public static class SnippetFileParser
             Topmost = ParseBool(Get(header, "topmost")) ?? false,
             Xaml = xaml,
             CSharp = fileText,
+            ProcessLaunchKey = ProcessLaunchMethod.GetFingerprint(fileText),
             HasXaml = hasXaml,
         };
     }
