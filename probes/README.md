@@ -38,6 +38,19 @@ This folder ships inside the xcopy bundle, so that command works on a test
 machine as well as in a clone. That matters: the answer to "has this changed?"
 usually has to be taken on the odd machine, not the dev box.
 
+## Reading the answer
+
+A probe reports twice. The window shows it in an `InfoBar`, which is the quick
+read. Anything the file passes to `Log()` also lands in a file:
+
+```powershell
+type %TEMP%\winui-repro-app\runner.log
+```
+
+Use the file when you need to keep the number - pasting it into a bug, diffing
+two builds, or reading it back off a VM. The console only prints that log by
+itself when the runner fails or exits unexpectedly.
+
 To answer the question against a candidate build rather than stock, point it at
 a package or a folder of loose files:
 

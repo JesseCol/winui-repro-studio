@@ -348,6 +348,12 @@ public sealed class MainWindow : Window
 
     private void AppendLog(string message)
     {
+        // Mirror to the log file as well as the in-window panel. A repro's Log()
+        // output is often the measurement itself, and a number you can only read
+        // by looking at a window is one you can't script, capture, or paste into
+        // a bug. Probes in particular are usually run on some other machine.
+        CrashLog.Log(message);
+
         DispatcherQueue.TryEnqueue(() =>
         {
             _logText.Text = _logText.Text.Length == 0 ? message : _logText.Text + "\n" + message;
