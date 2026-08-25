@@ -10,6 +10,8 @@
             ReproStudio.exe               <- run this
             runner-base\                  <- the prebuilt runner, copied per WASDK version
             samples\                      <- example repro files
+            probes\                       <- one-question platform checks, re-runnable
+            investigations\               <- per-bug harnesses
             ...
 
     The console host is what ships, not the WinUI host. It has no Windows App SDK
@@ -202,6 +204,19 @@ if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 Copy-Tree $cliOut $stage
 Copy-Tree $runnerOut (Join-Path $stage 'runner-base')
 Copy-Tree (Join-Path $repoRoot 'samples') (Join-Path $stage 'samples')
+
+# probes\ and investigations\ ship too. They exist to be run on a test machine -
+# an old build, a VM, a box with a candidate WASDK on it - and that machine has
+# the bundle, not a clone. Leaving them out meant the one place you most want to
+# re-take a measurement was the one place the harness wasn't.
+foreach ($extra in 'probes', 'investigations')
+{
+    $src = Join-Path $repoRoot $extra
+    if (Test-Path $src)
+    {
+        Copy-Tree $src (Join-Path $stage $extra)
+    }
+}
 
 # An empty drop folder, always. ReproStudio.exe looks for "payload" next to itself,
 # so shipping the folder pre-made turns "test a private build on this machine" into

@@ -18,6 +18,16 @@ WASDK build under test refuses to start.
 
 ## Quick start
 
+If you cloned the repo, build a bundle first. There is no exe in the tree:
+
+```powershell
+.\pack.ps1
+cd artifacts\ReproStudio-x64
+```
+
+That takes a few minutes and leaves you with the same folder the zip contains.
+If you got the zip instead, just unzip it and skip straight here.
+
 Point it at a repro file:
 
 ```powershell
@@ -486,10 +496,31 @@ windows) will return `S_OK` and change nothing you can see.
 
 ## Build it (without running)
 
-Everything is x64. Build the whole solution with:
+Everything is x64. `pack.ps1` is the normal way to build, because it also stages
+a runnable bundle. To just compile, build the projects directly:
 
 ```powershell
-dotnet build .\ReproStudio.slnx -c Debug
+dotnet build .\src\ReproStudio.Cli\ReproStudio.Cli.csproj -c Debug -p:Platform=x64
+dotnet build .\src\ReproStudio.Runner\ReproStudio.Runner.csproj -c Debug -p:Platform=x64
+```
+
+Build the projects, not the `.slnx`. `-p:Platform` doesn't reach the projects
+through the solution file, so a solution build writes `bin\Debug\` while
+`pack.ps1` writes `bin\x64\Debug\`. Mixing the two silently leaves you running
+stale binaries.
+
+Use the `dotnet` CLI (SDK 10.x), not VS2022's MSBuild, which resolves an older
+SDK and fails on net10 with NETSDK1045.
+
+A freshly built exe under `bin\` still needs a runner to drive. It has no
+`runner-base` next to it, so it falls back to the one in
+`%LOCALAPPDATA%\winui-repro-app\`, which nothing refreshes. **To test a Runner
+change, run `pack.ps1` and run from the bundle.** The console prints which runner
+it picked, so you can check:
+
+```
+runner    ...\artifacts\ReproStudio-x64\runner-base  (portable)   <- fresh
+runner    ...\AppData\Local\winui-repro-app\runner-base  (dev)    <- may be old
 ```
 
 ---

@@ -26,6 +26,10 @@ Run one the same way as any other repro:
 ReproStudio.exe investigations\ecitb-8948\ecitb-border-match.cs --no-watch
 ```
 
+This folder ships inside the xcopy bundle, so that works on the test machine too.
+Re-taking a number usually means going back to the machine that showed the bug,
+and that machine has the bundle rather than a clone.
+
 ## Adding one
 
 A folder per bug, named after the issue, with a `README.md` covering:

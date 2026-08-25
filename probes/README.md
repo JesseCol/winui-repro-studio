@@ -34,6 +34,10 @@ Same as any other repro file:
 ReproStudio.exe probes\skip-window-redirection-surface.cs --no-watch
 ```
 
+This folder ships inside the xcopy bundle, so that command works on a test
+machine as well as in a clone. That matters: the answer to "has this changed?"
+usually has to be taken on the odd machine, not the dev box.
+
 To answer the question against a candidate build rather than stock, point it at
 a package or a folder of loose files:
 
