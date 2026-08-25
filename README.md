@@ -349,8 +349,12 @@ file...**, after which the in-app editors turn into a read-only mirror.
 Want something to open right now? There are ready-made repros in
 [`samples/`](samples/) - try `samples/hello.cs`.
 
-Bigger measurement harnesses written to chase a specific bug live in
-[`investigations/`](investigations/), each with a write-up of what it found.
+Two other folders hold repro files with a job to do:
+
+| Folder | What's in it |
+|---|---|
+| [`probes/`](probes/) | One-file checks that settle a single question about platform behaviour, each with its measured answer and the WASDK version it was taken against |
+| [`investigations/`](investigations/) | Bigger measurement harnesses written to chase a specific bug, each with a write-up of what it found |
 
 ```csharp
 // repro:      My cool bug

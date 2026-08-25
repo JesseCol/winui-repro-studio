@@ -9,6 +9,11 @@ hundred lines, that exist to produce a number. They're worth keeping because
 someone will want to re-take that number against a candidate fix, and rebuilding
 the instrument from scratch is where the mistakes come from.
 
+They're also not probes. [`probes/`](../probes/) holds one-file checks that
+settle a single question about platform behaviour. The difference that matters:
+a probe is tied to the platform and stays useful forever, while an investigation
+is tied to a bug and becomes history once that bug closes.
+
 | Folder | Bug | Status |
 |---|---|---|
 | [`ecitb-8948/`](ecitb-8948/) | [#8948][8948] - `ExtendsContentIntoTitleBar` leaves a stripe on the top edge on Windows 10 | Baseline measured; candidate fix unresolved |
