@@ -822,3 +822,17 @@ implementing `IXamlMetadataProvider`).
 - The provisioned runners and downloaded packages live under
   `%LOCALAPPDATA%\winui-repro-app\` (see the cache table above) and aren't in the
   repo.
+- **A live re-render is not a fresh start.** Saving the file re-runs your XAML and
+  `Setup` inside the window that is already open. Anything painted during the *first*
+  show is not redone: `WM_ERASEBKGND`, `WM_NCCALCSIZE` and the DWM frame all happen
+  once, inside `ShowWindow`, long before your edit landed. If that is what you are
+  measuring, a hot push quietly reads a stale window and it looks like a real result.
+  Relaunch the runner - `--no-watch` is the simple way - and confirm a new pid before
+  believing the number.
+- **`theme:` does not change the colour the window fills itself with.** It sets
+  `RequestedTheme` on your snippet's root element, which sits inside the host's own
+  layout. WinUI reads `Window.Content.ActualTheme` to pick the HWND erase colour, and
+  `Window.Content` is that host layout, which stays Light. So the fill is white even
+  with `theme: Dark`. That stays invisible until you read pixels near the window edge
+  and find yourself measuring white against white. Paint a distinctive colour yourself
+  when a pixel value has to mean something.
