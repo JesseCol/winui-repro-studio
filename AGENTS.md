@@ -1,8 +1,8 @@
 # Agent notes - ReproStudio
 
 A tool for reproducing WinUI / Windows App SDK bugs against *any* WASDK version,
-without rebuilding. Read `README.md` for how it works. This file is the short
-version of what an agent needs to not break things.
+without rebuilding. Read `docs\how-it-works.md` for how it works. This file is
+the short version of what an agent needs to not break things.
 
 ## The shape
 

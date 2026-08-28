@@ -1,6 +1,6 @@
 # Agent notes - ReproStudio.Runner (the preview process)
 
-Read the root `README.md` first, especially "Running different WASDK versions".
+Read `docs\how-it-works.md` first, especially "Running different WASDK versions".
 This file only covers what is surprising about *this* project.
 
 ## What it is

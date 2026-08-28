@@ -1,7 +1,7 @@
 # Agent notes - ReproStudio.Host (the WinUI GUI front end)
 
-Read the root `README.md` first. This file only covers what is surprising about
-*this* project.
+Read the root `README.md` and `docs\guide.md` first. This file only covers what
+is surprising about *this* project.
 
 ## What it is
 
