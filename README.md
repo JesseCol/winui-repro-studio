@@ -115,7 +115,7 @@ Want something to open right now? There are ready-made repros in
 
 ```csharp
 // repro:      My cool bug
-// wasdk:      1.7            <- partial is fine; newest 1.7.x wins (see below)
+// wasdk:      1.7            <- partial is fine; newest 1.7.x wins (see the guide)
 // winui:      default        <- or a version, or a path to a local .nupkg
 // payload:    none           <- or a folder of files to copy over the runner
 // packaged:   no             <- give the runner package identity

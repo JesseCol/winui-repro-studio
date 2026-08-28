@@ -219,7 +219,7 @@ dotnet run --project .\src\ReproStudio.Host
 ```
 
 First run pulls packages and builds, so give it a minute. It also needs a base
-runner - see [The base runner](how-it-works.md#the-base-runner-built-once) below, or just run
+runner - see [The base runner](how-it-works.md#the-base-runner-built-once), or just run
 `.\pack.ps1` once.
 
 ## Using the WinUI host
@@ -253,7 +253,7 @@ running.
 
 ## More about the repro file
 
-Two other folders hold repro files with a job to do:
+Two more folders hold repro files with a job to do:
 
 | Folder | What's in it |
 |---|---|
