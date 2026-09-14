@@ -29,12 +29,12 @@ namespace ReproStudio.Shared;
 /// <para>
 /// This needs Developer Mode (or sideloading) turned on, which is the one real prerequisite
 /// packaged mode carries. When it is off, registration fails and the caller falls back to an
-/// unpackaged launch with the reason in the status bar.
+/// unpackaged launch with the reason printed to the console.
 /// </para>
 /// </summary>
 public sealed class PackagedRunnerLauncher
 {
-    // These three must match src\ReproStudio.Host\RunnerIdentity\Package.appxmanifest.
+    // These three must match RunnerIdentity\Package.appxmanifest in this project.
     private const string PackageName = "ReproStudio.Runner";
     private const string PackagePublisher = "CN=AppPublisher";
     private const string ApplicationId = "ReproStudioRunner";

@@ -123,7 +123,7 @@ internal static class Doctor
         if (!File.Exists(Path.Combine(dir, "ReproStudio.Runner.exe")))
         {
             findings.Fail("runner-base exists but has no ReproStudio.Runner.exe in it. "
-                + "The bundle is incomplete - re-extract the zip.");
+                + "Run dotnet build at the repo root, or re-extract a complete bundle.");
             return;
         }
 
@@ -136,7 +136,7 @@ internal static class Doctor
         else
         {
             findings.Fail("The base runner is not self-contained for .NET, so this machine needs "
-                + ".NET 10 installed. Rebuild the bundle with pack.ps1.");
+                + ".NET 10 installed. Rebuild from source with dotnet build, or re-extract a complete bundle.");
         }
 
         // Same story for WASDK: the whole version-overlay design depends on the native
@@ -149,7 +149,7 @@ internal static class Doctor
         {
             findings.Fail("The base runner has no Microsoft.ui.xaml.dll next to it, so it is "
                 + "framework-dependent and expects an installed Windows App SDK. "
-                + "Rebuild the bundle with pack.ps1.");
+                + "Rebuild from source with dotnet build, or re-extract a complete bundle.");
         }
 
         ReportResourceIndex(dir, findings);
@@ -179,7 +179,8 @@ internal static class Doctor
         {
             findings.Fail("ReproStudio.Runner.pri is missing from the base runner, so the runner "
                 + "will crash on startup unable to find themeresources.xaml. That happens when the "
-                + "runner is published instead of built - rebuild the bundle with pack.ps1.");
+                + "runner is published instead of built - rebuild from source with dotnet build, "
+                + "or re-extract a complete bundle.");
         }
         else if (!hasStray)
         {
@@ -355,7 +356,6 @@ internal static class Doctor
     {
         string dir = Path.Combine(Path.GetTempPath(), "winui-repro-app");
         Log.Field("runner", Describe(Path.Combine(dir, "runner.log")));
-        Log.Field("host", Describe(Path.Combine(dir, "host.log")));
     }
 
     /// <summary>

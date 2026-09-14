@@ -28,9 +28,9 @@ themeresources.xaml'"*.
 **Never let a `resources.pri` into the output.** Same crash, different cause. When
 a file literally named `resources.pri` exists next to the exe, WinUI uses it
 *instead of* `ReproStudio.Runner.pri`, and the framework themes are not in it.
-MSIX tooling has written one into `bin` in the past, and `dotnet build` does not
-clean `bin`, so it survives rebuilds and then gets copied into `runner-base` and
-from there into every provisioned version folder.
+MSIX tooling has written one into build output in the past. Incremental builds
+do not remove unrelated files, so it can survive rebuilds and then get copied
+into every provisioned version folder.
 
 There is a `RemoveStaleResourcesPri` target at the bottom of the `.csproj` that
 deletes it after every build, and `pack.ps1` throws if it sees one. **Both are
@@ -62,14 +62,16 @@ is self-contained, and whether a stale `resources.pri` is present.
 ## Build
 
 ```powershell
-dotnet build .\ReproStudio.slnx -c Debug -p:Platform=x64
+dotnet build
 ```
 
 Use the `dotnet` CLI (SDK 10.x); VS2022's MSBuild fails with NETSDK1045 on net10.
 
-A running Runner **locks its own exe**, so kill leftover `ReproStudio.Runner`
-processes before rebuilding.
+A running Runner **locks its own exe**, so close it if it is running directly
+from the build output before rebuilding.
 
-After changing anything here, the base runner is stale. Re-run `.\pack.ps1`, or
-copy the build output over `runner-base` by hand. A stale base is silent and
-confusing - `--doctor` is how you catch it.
+The Runner builds directly into
+`artifacts\<Configuration>\<Platform>\runner-base\`. The CLI is one level above.
+After changing anything here, rebuild and run
+`.\artifacts\Debug\x64\ReproStudio.exe samples\hello.cs` from the repo root.
+No packing or manual copy is needed. `--doctor` shows which base is in use.

@@ -1,0 +1,12 @@
+<Project>
+  <!-- Reject mismatched or unsupported RIDs before restoring/building an app
+       into a folder labeled for a different architecture. -->
+  <Target Name="ValidateBundleArchitecture"
+          BeforeTargets="CollectPackageReferences;PrepareForBuild"
+          Condition="'$(OutputType)' == 'Exe' or '$(OutputType)' == 'WinExe'">
+    <Error Condition="'$(Platform)' != 'x64' and '$(Platform)' != 'ARM64' and '$(Platform)' != 'x86'"
+           Text="Unsupported Platform '$(Platform)'. Use x64, ARM64, or x86." />
+    <Error Condition="'$(RuntimeIdentifier)' != 'win-$(Platform.ToLowerInvariant())'"
+           Text="RuntimeIdentifier '$(RuntimeIdentifier)' must match Platform '$(Platform)' (expected 'win-$(Platform.ToLowerInvariant())'). Use matching -p:Platform and -r values, or omit Platform to infer it from -r." />
+  </Target>
+</Project>

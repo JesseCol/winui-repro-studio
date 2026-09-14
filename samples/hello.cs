@@ -2,7 +2,7 @@
 // theme: Default
 // flow:  LeftToRight
 
-// A single-file repro. The Host watches this file; every save refreshes the
+// A single-file repro. The CLI watches this file; every save refreshes the
 // Runner. XAML lives in the Xaml raw-string; your logic goes in Setup.
 class Repro
 {

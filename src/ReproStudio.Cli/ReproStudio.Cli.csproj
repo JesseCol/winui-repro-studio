@@ -8,7 +8,10 @@
     <AssemblyName>ReproStudio</AssemblyName>
     <RootNamespace>ReproStudio_Cli</RootNamespace>
     <Platforms>x86;x64;ARM64</Platforms>
-    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-$([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLowerInvariant())</RuntimeIdentifier>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-$(Platform.ToLowerInvariant())</RuntimeIdentifier>
+    <OutputPath>$(BundleRoot)</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
 
@@ -21,7 +24,7 @@
       when a repro asks for package identity.
 
       That matters for two reasons:
-        - Size. It is a fraction of the WinUI host, because it carries no WinUI.
+        - Size. The console carries no WinUI runtime.
         - Diagnosis. This tool exists to chase bugs in the Windows App SDK, so the thing
           you drive it with should not itself depend on the stack under suspicion. If the
           runner will not start, the console host still runs and can say why.
@@ -33,7 +36,19 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\ReproStudio.Shared\ReproStudio.Shared.csproj" />
+    <!-- Carry an inferred Platform through even when the SDK strips the app RID. -->
+    <ProjectReference Include="..\ReproStudio.Shared\ReproStudio.Shared.csproj" AdditionalProperties="Platform=$(Platform)" />
   </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="..\..\samples\**\*" Link="samples\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\probes\**\*" Link="probes\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\investigations\**\*" Link="investigations\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- Never delete or track user payload files as build outputs. -->
+  <Target Name="CreatePayloadDirectory" AfterTargets="Build">
+    <MakeDir Directories="$(OutDir)payload" />
+  </Target>
 
 </Project>

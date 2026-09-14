@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
-    Builds ReproStudio into a portable folder you can xcopy to another machine.
+    Packages ReproStudio into a portable folder and zip.
 
 .DESCRIPTION
-    Produces artifacts\ReproStudio-<platform>\ containing the console host at the root,
-    the base runner beside it, and the sample repros:
+    Runs the normal solution build, then copies its runnable output from
+    artifacts\<configuration>\<platform>\ into artifacts\ReproStudio-<platform>\:
 
         ReproStudio-x64\
             ReproStudio.exe               <- run this
@@ -14,9 +14,11 @@
             investigations\               <- per-bug harnesses
             ...
 
-    The console host is what ships, not the WinUI host. It has no Windows App SDK
-    dependency at all, which keeps the bundle small and means the tool still runs (and
-    can still tell you why) when the WASDK build under test will not start.
+    Repro files come from the source tree, not locally edited build-output copies.
+
+    The console host has no Windows App SDK dependency, which keeps the bundle small
+    and means the tool still runs (and can still tell you why) when the WASDK build
+    under test will not start.
 
     Both executables are self-contained for .NET, and the runner is additionally
     self-contained for the Windows App SDK, so the target machine needs no SDK, no .NET
@@ -48,7 +50,8 @@
     machine that is offline or firewalled off from NuGet.
 
 .PARAMETER NoZip
-    Stage the folder but skip the zip.
+    Prepare the distribution folder but skip the zip. For local development,
+    use dotnet build instead.
 
 .EXAMPLE
     .\pack.ps1
@@ -95,38 +98,38 @@ if ($LocalWinUi) {
     }
 }
 
-$rid = 'win-' + $Platform.ToLowerInvariant()
+$solution = Join-Path $repoRoot 'ReproStudio.slnx'
 $cliProject = Join-Path $repoRoot 'src\ReproStudio.Cli\ReproStudio.Cli.csproj'
 $runnerProject = Join-Path $repoRoot 'src\ReproStudio.Runner\ReproStudio.Runner.csproj'
 
-# Both projects default their RuntimeIdentifier from the *build* machine's architecture,
-# so it has to be passed explicitly or cross-architecture packing would silently produce
-# the wrong runtime.
 $buildArgs = @(
     '-c', $Configuration
     '-p:Platform=' + $Platform
-    '-p:RuntimeIdentifier=' + $rid
 )
 
 function Get-OutputDirectory([string] $project) {
-    # Ask MSBuild rather than reconstructing the path: it varies with TFM and RID, and a
-    # stale guess would silently package the wrong bits.
-    $relative = & dotnet msbuild $project @(
+    $output = & dotnet msbuild $project @(
         '-p:Configuration=' + $Configuration
         '-p:Platform=' + $Platform
-        '-p:RuntimeIdentifier=' + $rid
         '-getProperty:OutDir'
     ) | Select-Object -Last 1
 
-    if (-not $relative) { throw "Could not read OutDir for $project." }
-    return Join-Path (Split-Path -Parent $project) $relative.Trim()
+    if ($LASTEXITCODE -ne 0 -or -not $output) { throw "Could not read OutDir for $project." }
+    $output = $output.Trim()
+    if (-not [System.IO.Path]::IsPathRooted($output)) {
+        $output = Join-Path (Split-Path -Parent $project) $output
+    }
+    return [System.IO.Path]::GetFullPath($output)
 }
 
-function Copy-Tree([string] $source, [string] $destination) {
+function Copy-Tree([string] $source, [string] $destination, [string[]] $excludeDirectories = @()) {
     New-Item -ItemType Directory -Path $destination -Force | Out-Null
-    # /MIR so a rerun cannot leave stale files behind. Robocopy uses exit codes 0-7 for
-    # success, so anything higher is a real failure.
-    $null = robocopy $source $destination /MIR /NFL /NDL /NJH /NJS /NP /R:2 /W:1
+    $copyArgs = @($source, $destination, '/MIR', '/NFL', '/NDL', '/NJH', '/NJS', '/NP', '/R:2', '/W:1')
+    if ($excludeDirectories.Count -gt 0) {
+        $copyArgs += @('/XD') + $excludeDirectories
+    }
+    $null = robocopy @copyArgs
+    # Robocopy uses exit codes 0-7 for success.
     if ($LASTEXITCODE -ge 8) { throw "Copy failed ($source -> $destination), robocopy exit $LASTEXITCODE." }
 }
 
@@ -156,20 +159,12 @@ if "%~1"=="" (
     Set-Content -Path $path -Value $body -Encoding ascii
 }
 
-# A running runner holds a lock on its own exe, which makes the build fail with a
-# confusing file-in-use error.
-Get-Process -Name 'ReproStudio', 'ReproStudio.Runner', 'ReproStudio.Host' -ErrorAction SilentlyContinue |
-    ForEach-Object { Stop-Process -Id $_.Id -Force }
-
-Write-Host "Building $Configuration $Platform ($rid)..." -ForegroundColor Cyan
+Write-Host "Building $Configuration $Platform..." -ForegroundColor Cyan
 
 # dotnet build, not dotnet publish: publish drops ReproStudio.Runner.pri, and without it the
 # runner cannot resolve ms-appx:///Microsoft.UI.Xaml/Themes/themeresources.xaml and crashes.
-& dotnet build $runnerProject @buildArgs
-if ($LASTEXITCODE -ne 0) { throw 'Runner build failed.' }
-
-& dotnet build $cliProject @buildArgs
-if ($LASTEXITCODE -ne 0) { throw 'Console host build failed.' }
+& dotnet build $solution @buildArgs
+if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
 
 $cliOut = Get-OutputDirectory $cliProject
 $runnerOut = Get-OutputDirectory $runnerProject
@@ -185,12 +180,13 @@ foreach ($required in @(
         (Join-Path $runnerOut 'ReproStudio.Runner.pri')
         # Needed for "// packaged: yes"; easy to lose, and it only fails at launch time.
         (Join-Path $cliOut 'RunnerIdentity\Package.appxmanifest')
+        (Join-Path $repoRoot 'samples\hello.cs')
     )) {
     if (-not (Test-Path $required)) { throw "Build output is missing $required." }
 }
 
 # A resources.pri in the runner output shadows ReproStudio.Runner.pri and makes every
-# launch die on themeresources.xaml. The build deletes it, but bin is not cleaned between
+# launch die on themeresources.xaml. The build deletes it, but output is not cleaned between
 # builds and MSIX tooling has written one there before, so refuse to ship one.
 $strayPri = Join-Path $runnerOut 'resources.pri'
 if (Test-Path $strayPri) {
@@ -198,23 +194,25 @@ if (Test-Path $strayPri) {
 }
 
 $stage = Join-Path $OutputRoot ('ReproStudio-' + $Platform)
+$sourceRoot = $cliOut.TrimEnd('\')
+$stageRoot = [System.IO.Path]::GetFullPath($stage).TrimEnd('\')
+if ($sourceRoot.Equals($stageRoot, [StringComparison]::OrdinalIgnoreCase) -or
+    $stageRoot.StartsWith($sourceRoot + '\', [StringComparison]::OrdinalIgnoreCase) -or
+    $sourceRoot.StartsWith($stageRoot + '\', [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'The distribution folder must not overlap the build output. Choose a different -OutputRoot.'
+}
 Write-Host "Staging $stage..." -ForegroundColor Cyan
 
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
-Copy-Tree $cliOut $stage
-Copy-Tree $runnerOut (Join-Path $stage 'runner-base')
-Copy-Tree (Join-Path $repoRoot 'samples') (Join-Path $stage 'samples')
+$contentFolders = @('samples', 'probes', 'investigations')
+$excludeDirectories = @('payload') + $contentFolders | ForEach-Object { Join-Path $cliOut $_ }
+Copy-Tree $cliOut $stage -ExcludeDirectories $excludeDirectories
 
-# probes\ and investigations\ ship too. They exist to be run on a test machine -
-# an old build, a VM, a box with a candidate WASDK on it - and that machine has
-# the bundle, not a clone. Leaving them out meant the one place you most want to
-# re-take a measurement was the one place the harness wasn't.
-foreach ($extra in 'probes', 'investigations')
-{
-    $src = Join-Path $repoRoot $extra
-    if (Test-Path $src)
-    {
-        Copy-Tree $src (Join-Path $stage $extra)
+# Build-output repros are editable. Ship current source files, never those local edits.
+foreach ($folder in $contentFolders) {
+    $source = Join-Path $repoRoot $folder
+    if (Test-Path -LiteralPath $source -PathType Container) {
+        Copy-Tree $source (Join-Path $stage $folder)
     }
 }
 

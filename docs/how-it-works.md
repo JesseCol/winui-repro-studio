@@ -10,7 +10,6 @@ through a JSON file, and your C# gets compiled at runtime with Roslyn.
 ```
  +---------------------+
  |  ReproStudio.exe    |  console host, no WASDK
- |  (or .Host.exe)     |  WinUI host, has WASDK
  +---------------------+
             |  request.json (JSON on disk)
             v
@@ -19,16 +18,15 @@ through a JSON file, and your C# gets compiled at runtime with Roslyn.
  |  self-contained WASDK|  one per version
  +----------------------+
 
-  both hosts sit on ReproStudio.Shared
+  both processes reference ReproStudio.Shared
   (Snippet, RunnerHost, RunnerProvisioner, PackagedRunnerLauncher, AppLayout)
 ```
 
 - **Cli** is the console host. No WASDK reference at all.
-- **Host** is the WinUI GUI. Unpackaged and self-contained, same as the runner.
 - **Runner** is a separate, throwaway process that does the actual rendering.
   There's one Runner per WASDK version.
-- **Shared** is everything both hosts need: the `Snippet` contract, the launcher,
-  the provisioner, and the file-layout rules.
+- **Shared** holds the `Snippet` contract and IPC used by both processes, plus
+  the CLI's launcher, provisioner, and file-layout rules.
 
 Why separate processes? So we can render the same snippet against *different*
 WASDK versions. Each version gets its own Runner exe with that version's runtime
@@ -51,12 +49,15 @@ build - the "base" - is found in one of two places:
 
 | Deployment | Where the base comes from |
 |---|---|
-| Portable (xcopy bundle) | `runner-base\` next to the host exe |
-| Dev box | `%LOCALAPPDATA%\winui-repro-app\runner-base` |
+| Normal build or portable bundle | `runner-base\` next to the host exe |
+| Legacy fallback | `%LOCALAPPDATA%\winui-repro-app\runner-base` |
 
-`pack.ps1` produces the first. For the second, build
-`src\ReproStudio.Runner` and copy its output there. `--doctor` tells you which one
-is in play.
+`dotnet build` writes the CLI directly into `artifacts\<Configuration>\<Platform>\`
+and the Runner into its `runner-base\` subfolder. `pack.ps1` uses that same build
+and copies the built app for distribution, taking repro files from the source
+tree rather than editable build copies. The build needs no separate step to
+assemble the app. The legacy cache fallback remains for old layouts, but a
+normal build no longer uses it. `--doctor` tells you which one is in play.
 
 Either way, everything the tool *writes* goes to the cache root, so the bundle
 folder itself is read-only and can live on a share or a USB stick.
@@ -161,7 +162,7 @@ Everything lives under `%LOCALAPPDATA%\winui-repro-app\`, or wherever
 
 | Folder | What |
 |---|---|
-| `runner-base\` | The self-contained base runner (dev boxes only; a bundle carries its own). |
+| `runner-base\` | Legacy base runner fallback. Normal builds and bundles carry their own. |
 | `nupkgs\`      | Downloaded + extracted WASDK NuGet packages. |
 | `versions\`    | One assembled runner per version you've used. |
 | `local-winui\` | Extracted local WinUI `.nupkg` overrides. |
@@ -173,13 +174,13 @@ without one still gets untouched stock bits, and the suffix is fixed rather than
 per-payload so iterating on a DLL replaces the folder instead of leaving a
 350 MB copy behind every time.
 
-`--clear-cache` (console) and the **Clear cache** button (GUI) wipe `versions\`
-and `local-winui\`, keeping `nupkgs\` so re-provisioning is fast. Handy after you
-rebuild the base, or if a version folder ever gets wedged.
+`--clear-cache` wipes `versions\` and `local-winui\`, keeping `nupkgs\` so
+re-provisioning is fast. Handy after you rebuild the base, or if a version folder
+ever gets wedged.
 
 ## Packaged mode
 
-Both hosts can give the runner real package identity, without any MSIX build step
+The CLI can give the runner real package identity, without any MSIX build step
 (see `PackagedRunnerLauncher`):
 
 1. Copy `RunnerIdentity\Package.appxmanifest` into the version folder as
@@ -280,20 +281,17 @@ implementing `IXamlMetadataProvider`).
 
 ## Gotchas
 
-- A running Runner **locks its own .exe**, so a rebuild can fail with a file-lock
-  error. Kill leftover `ReproStudio.Runner` processes first. `pack.ps1` does this
-  for you.
+- A running app **locks its own files**, so a rebuild can fail with a file-lock
+  error. Close the app using that build output before rebuilding. Builds and
+  packing do not automatically terminate running repros.
 - Use `dotnet` (SDK 10.x), not VS2022's MSBuild. VS resolves an older SDK and
   chokes on net10 (NETSDK1045).
-- `Directory.Build.props` at the repo root is intentionally almost empty. It stops
-  MSBuild's upward search from finding a parent repo's props file that would
-  redirect `OutDir`. Don't delete it.
-- Self-contained builds put the output under a RID subfolder
-  (`bin\x64\Debug\<tfm>\win-x64\`). `pack.ps1` asks MSBuild for `OutDir` rather
-  than guessing.
-- Both hosts and the runner derive their `RuntimeIdentifier` from the *build*
-  machine's architecture. `pack.ps1` passes `-p:RuntimeIdentifier` explicitly so
-  cross-architecture packing is correct.
+- Root build settings keep outputs under `artifacts\<Configuration>\<Platform>\`
+  and shield this repo from unrelated parent build settings. Don't delete them.
+- The CLI and Runner have separate output directories but share one output root.
+  `pack.ps1` asks MSBuild for `OutDir`, which can be an absolute path.
+- The selected target architecture determines the runtime identifier, so an
+  ARM64 build carries the ARM64 runtime even when built on an x64 machine.
 - The provisioned runners and downloaded packages live under
   `%LOCALAPPDATA%\winui-repro-app\` (see the cache table above) and aren't in the
   repo.

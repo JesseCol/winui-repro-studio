@@ -8,13 +8,13 @@ namespace ReproStudio.Shared;
 /// </para>
 /// <list type="bullet">
 /// <item><description>
-/// <b>Portable (xcopy).</b> A <c>runner-base</c> folder sits next to the host exe, so
-/// the whole tool is one folder you unzip on any machine and double-click.
+/// <b>Build or portable bundle.</b> A <c>runner-base</c> folder sits next to the
+/// host exe, so the whole tool is one runnable folder.
 /// </description></item>
 /// <item><description>
-/// <b>Dev.</b> No <c>runner-base</c> next to the exe (the host runs out of
-/// <c>bin\...</c>), so we fall back to the one under <c>%LOCALAPPDATA%</c> that a
-/// developer built and copied there.
+/// <b>Legacy fallback.</b> No <c>runner-base</c> next to the exe, so we fall back
+/// to the one under <c>%LOCALAPPDATA%</c> that a developer built and copied there.
+/// Normal builds no longer use this layout.
 /// </description></item>
 /// </list>
 /// <para>
@@ -96,8 +96,7 @@ public sealed class AppLayout
     /// </summary>
     public string DescribeMissingBaseRunner() =>
         $"Base runner missing (looked in {BaseRunnerDir}). "
-        + "In an xcopy bundle, the runner-base folder should sit next to the host exe - "
-        + "re-extract the zip. On a dev box, run pack.ps1, or build "
-        + "src\\ReproStudio.Runner and copy its output to "
-        + $"%LOCALAPPDATA%\\winui-repro-app\\{BaseRunnerFolderName}.";
+        + "The runner-base folder should sit next to ReproStudio.exe. "
+        + "From source, run dotnet build at the repo root and use the exe under "
+        + "artifacts\\<Configuration>\\<Platform>. For a downloaded bundle, re-extract the zip.";
 }

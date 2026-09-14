@@ -1,0 +1,4 @@
+<Project>
+  <!-- Solution configuration is selected before any project's props are read. -->
+  <Import Project="$(MSBuildThisFileDirectory)Directory.Build.props" />
+</Project>

@@ -7,7 +7,10 @@
     <RootNamespace>ReproStudio_Runner</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <Platforms>x86;x64;ARM64</Platforms>
-    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-$([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLowerInvariant())</RuntimeIdentifier>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-$(Platform.ToLowerInvariant())</RuntimeIdentifier>
+    <OutputPath>$(BundleRoot)runner-base\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
     <UseWinUI>true</UseWinUI>
     <WinUISDKReferences>false</WinUISDKReferences>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -45,7 +48,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\ReproStudio.Shared\ReproStudio.Shared.csproj" />
+    <!-- Carry an inferred Platform through even when the SDK strips the app RID. -->
+    <ProjectReference Include="..\ReproStudio.Shared\ReproStudio.Shared.csproj" AdditionalProperties="Platform=$(Platform)" />
   </ItemGroup>
 
   <!--

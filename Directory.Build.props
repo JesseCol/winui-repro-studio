@@ -1,10 +1,17 @@
 <Project>
   <!--
-    Standalone tool: do NOT inherit the parent repo's build props
-    (D:\jecollin\directory.build.props redirects OutDir/IntDir to _build\...).
-    That custom layout hides the packaged .exe from the winapp CLI, so launching
-    fails. This file lives above our src\ projects, which stops MSBuild's upward
-    search and restores the default bin\<Platform>\<Config>\<TFM>\win-<rid>
-    output layout that winapp run / dotnet run expect.
+    Keep this file at the repo root: it stops MSBuild's upward search from
+    importing unrelated parent build props. Directory.Solution.props also
+    imports these defaults so solution and direct project builds agree.
   -->
+  <PropertyGroup>
+    <Configuration Condition="'$(Configuration)' == ''">Debug</Configuration>
+    <!-- An explicit RID selects the platform unless Platform was also supplied. -->
+    <Platform Condition="'$(Platform)' == '' and '$(RuntimeIdentifier)' == 'win-arm64'">ARM64</Platform>
+    <Platform Condition="'$(Platform)' == '' and '$(RuntimeIdentifier)' == 'win-x86'">x86</Platform>
+    <Platform Condition="'$(Platform)' == ''">x64</Platform>
+    <BundleRoot Condition="'$(BundleRoot)' == ''">$([MSBuild]::NormalizeDirectory('$(MSBuildThisFileDirectory)', 'artifacts', '$(Configuration)', '$(Platform)'))</BundleRoot>
+    <!-- Outputs are project-specific even outside src; let Clean track dependency copies. -->
+    <TrackFileWritesShareableOutsideOfProjectDirectory>true</TrackFileWritesShareableOutsideOfProjectDirectory>
+  </PropertyGroup>
 </Project>

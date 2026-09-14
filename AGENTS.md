@@ -8,13 +8,11 @@ the short version of what an agent needs to not break things.
 
 | Project | What | WASDK? |
 |---|---|---|
-| `ReproStudio.Cli` | Console host, `ReproStudio.exe`. **The one that ships.** | No |
-| `ReproStudio.Host` | Optional WinUI GUI front end | Yes |
+| `ReproStudio.Cli` | CLI, `ReproStudio.exe`. The entry point. | No |
 | `ReproStudio.Runner` | The preview process. One copy per WASDK version. | Yes |
-| `ReproStudio.Shared` | Everything both hosts need | No |
+| `ReproStudio.Shared` | Repro contracts, provisioning, and launch support | No |
 
-Each project folder has its own `AGENTS.md` where the rules are sharper. Read the
-one for whatever you are touching.
+Read any project-local `AGENTS.md` before changing that project.
 
 ## Rules that apply everywhere
 
@@ -23,8 +21,8 @@ that it runs when WASDK is broken or absent. `Shared` gets package registration
 from `Windows.Management.Deployment.PackageManager`, which comes free with a
 `net10.0-windows` TFM and needs no Windows App SDK. Keep it that way.
 
-**Shared behaviour goes in Shared.** Two front ends, one engine. If you add a
-feature to one host that the other would want, it belongs in Shared.
+**Keep the CLI and Runner on the same contract.** Both reference Shared for the
+repro format and IPC. Keep console interaction in Cli and rendering in Runner.
 
 **Windows 10 1809 (build 17763) is the floor.** Everything here is meant to xcopy
 to an old machine with no SDK, no .NET, and no WASDK installed. Any API newer than
@@ -35,44 +33,40 @@ not switch anything to framework-dependent to shrink the build.
 
 ## Build
 
-Build the **project**, not the solution:
+Build from the repo root:
 
 ```powershell
-dotnet build .\src\ReproStudio.Cli\ReproStudio.Cli.csproj -c Debug -p:Platform=x64
+dotnet build
+.\artifacts\Debug\x64\ReproStudio.exe samples\hello.cs
 ```
 
-- **`-p:Platform` does not reach the projects through the `.slnx`.** Building the
-  solution writes `bin\Debug\`, while `pack.ps1` (which builds projects directly)
-  writes `bin\x64\Debug\`. Mixing the two silently runs stale binaries. This has
-  already cost one bogus verification run. Build projects directly.
+- The CLI builds directly into `artifacts\<Configuration>\<Platform>\` and the
+  Runner into its `runner-base\` subfolder. There is no separate assembly step.
+- Defaults are Debug and x64. Use `-c Release` or `-p:Platform=ARM64` / `x86`
+  as needed. Solution and direct project builds use the same output layout.
 - Use the `dotnet` CLI (SDK 10.x). VS2022's MSBuild resolves an older SDK and
   fails with NETSDK1045 on net10.
-- Self-contained output lands under a RID subfolder. Don't guess the path, ask:
+- Scripts should ask MSBuild for the output path rather than reconstruct it:
   ```powershell
   dotnet msbuild <proj> -getProperty:OutDir -p:Configuration=Debug -p:Platform=x64
   ```
-- Do not delete the near-empty `Directory.Build.props` at the repo root. It stops
-  MSBuild's upward search from finding an unrelated parent props file.
+- Keep the root build configuration files. They set the output layout and stop
+  MSBuild's upward search from finding unrelated parent settings.
 - There are no tests. Verify by running it.
 
-**To test a Runner change, run `pack.ps1` and run from the bundle.** A plain
-`dotnet build` is not enough. The exe in `bin\` finds no `runner-base` beside
-itself, so it falls back to the cache copy at
-`%LOCALAPPDATA%\winui-repro-app\runner-base` - and **nothing refreshes that
-copy**. `pack.ps1` refreshes the bundle's `runner-base`; `dotnet build` writes
-only to `bin\`. So the cache copy stays at whatever date it was seeded.
+**To test a Runner change, run `dotnet build` and use the exe under `artifacts`.**
+The build refreshes `runner-base` directly. Old exes under `bin\` or an old packed
+bundle are not refreshed and can still run stale code.
 
 The console prints which one it picked, so check it:
 
 ```
-runner    ...\artifacts\ReproStudio-x64\runner-base  (portable)   <- fresh
+runner    ...\artifacts\Debug\x64\runner-base  (portable)         <- fresh
 runner    ...\AppData\Local\winui-repro-app\runner-base  (dev)    <- may be old
 ```
 
-This is not the same as the version-folder self-heal. That compares each
-provisioned copy against the base and re-provisions on mismatch, so it cannot
-help when the base itself is stale. It has already burned one session: a working
-feature looked completely broken, with no window, no error, and no log.
+Version folders self-heal against the base, not against source. That cannot help
+when the base itself is stale.
 
 ## Packing
 
@@ -80,9 +74,11 @@ feature looked completely broken, with no window, no error, and no log.
 .\pack.ps1
 ```
 
-Builds the Runner and the Cli, stages `artifacts\ReproStudio-x64\`, and zips it.
-The staged folder is what gets xcopied to a test machine. `pack.ps1` also
-refreshes `runner-base`, so run it after changing the Runner.
+Runs the normal Release build, copies the runnable output into
+`artifacts\ReproStudio-x64\`, and zips it. Packing is only needed for distribution
+or offline bundles, not for the local build/run loop. It ships an empty payload
+folder even if the development output has private DLLs in its payload folder.
+Samples, probes, and investigations come from source, not editable build copies.
 
 ## Testing a private WASDK build
 

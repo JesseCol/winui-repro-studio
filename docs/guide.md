@@ -1,7 +1,7 @@
 # ReproStudio guide
 
 Everything past the quick start: taking it to another machine, testing your own
-builds, running the WinUI host, and the rest of the repro file format.
+builds, and writing repro files.
 
 Back to the [README](../README.md).
 
@@ -15,7 +15,7 @@ That produces `artifacts\ReproStudio-x64.zip`. Unzip it anywhere on the target
 machine and run it:
 
 ```powershell
-ReproStudio.exe samples\hello.cs
+.\ReproStudio.exe samples\hello.cs
 ```
 
 The target machine needs **nothing installed** - no SDK, no .NET runtime, no
@@ -26,16 +26,16 @@ minimum for .NET 10 and for every WASDK version this tool provisions.
 If something doesn't work, ask it:
 
 ```powershell
-ReproStudio.exe --doctor
+.\ReproStudio.exe --doctor
 ```
 
 That prints the OS build, whether it clears the 17763 floor, where the base runner
 came from, what's in the cache, and whether Developer Mode is on.
 
-## Run the console host
+## CLI options
 
 ```powershell
-ReproStudio.exe <file.cs> [options]
+.\ReproStudio.exe <file.cs> [options]
 ```
 
 | Option | What |
@@ -55,7 +55,7 @@ Set `REPROSTUDIO_CACHE` to move downloads and provisioned runners off
 `%LOCALAPPDATA%`.
 
 While it's watching, saving the file pushes the change. Editing a *launch-time*
-header key (`wasdk`, `winui`, `packaged`, `dpi`) re-provisions and relaunches
+header key (`wasdk`, `winui`, `payload`, `packaged`, `dpi`) re-provisions and relaunches
 instead. If the runner dies on its own, the console says so and prints whatever
 the runner appended to its crash log.
 
@@ -69,7 +69,7 @@ so testing a private build of `Microsoft.ui.xaml.dll` is a matter of dropping th
 file somewhere and running:
 
 ```powershell
-ReproStudio.exe samples\hello.cs --payload D:\my-winui-build
+.\ReproStudio.exe samples\hello.cs --payload D:\my-winui-build
 ```
 
 Whatever is in that folder wins over the stock file of the same name. Files keep
@@ -134,7 +134,7 @@ the Base, Foundation and InteractiveExperiences versions it was compiled against
 Point ReproStudio at it and it works out the rest:
 
 ```powershell
-ReproStudio.exe bug.cs --winui D:\winui\...\Microsoft.WindowsAppSDK.WinUI.3.9.9-mybuild.nupkg
+.\ReproStudio.exe bug.cs --winui D:\winui\...\Microsoft.WindowsAppSDK.WinUI.3.9.9-mybuild.nupkg
 ```
 
 ```
@@ -164,7 +164,7 @@ stack removes the guess.
 Pass `--wasdk` too and you get a middle ground:
 
 ```powershell
-ReproStudio.exe bug.cs --wasdk 2.2.0 --winui 2.3.0
+.\ReproStudio.exe bug.cs --wasdk 2.2.0 --winui 2.3.0
 ```
 
 The WASDK version supplies everything (AI, ML, Widgets, DWrite and the rest), and
@@ -210,48 +210,46 @@ Drop a `nuget.config` next to the repro file to add one for a single repro:
 `--doctor` lists the sources it found. If a version cannot be fetched, the error
 names the package, the version, and every source it tried.
 
-## Run the WinUI host
+## Write a repro file
 
-From this folder:
+Start by copying [`samples/hello.cs`](../samples/hello.cs). A repro is an ordinary
+C# file with optional `// key: value` headers, a required `Xaml` string literal,
+and an optional `Setup` method:
 
-```powershell
-dotnet run --project .\src\ReproStudio.Host
+```csharp
+// repro: My cool bug
+// wasdk: 1.7
+
+class Repro
+{
+    const string Xaml = """
+        <StackPanel xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    Padding="24" Spacing="12">
+            <TextBlock Text="Hello from a file!" FontSize="28" />
+            <Button x:Name="HelloButton" Content="Click me" />
+        </StackPanel>
+        """;
+
+    static void Setup(FrameworkElement root, Window window)
+    {
+        Log("Loaded from file.");
+        if (root.FindName("HelloButton") is Button button)
+        {
+            button.Click += (s, e) => button.Content = "Clicked!";
+        }
+    }
+}
 ```
 
-First run pulls packages and builds, so give it a minute. It also needs a base
-runner - see [The base runner](how-it-works.md#the-base-runner-built-once), or just run
-`.\pack.ps1` once.
+Keep the class wrapper: snippets compile as a library, so top-level statements
+fail with `CS8805`. The runner imports common WinUI namespaces for you.
 
-## Using the WinUI host
+Every header key is optional. See the [file format](../samples/README.md#the-format-in-one-breath)
+for all keys and which ones update live or restart the runner.
 
-Two windows show up: the **Host** (your editor) and the **Runner** (the live
-preview, docked to its right).
-
-In the Host:
-- Pick a **WASDK** version. Optionally pick a **WinUI** version, or **Browse
-  .nupkg** to try a local WinUI build.
-- Type in the **XAML** or **C#** tab. They're tabs, not side by side, so you get
-  the full width for whichever you're editing. Edits stream to the preview live
-  (a short debounce).
-- **Relaunch** restarts the preview. **Clear cache** wipes the provisioned
-  versions and rebuilds the current one.
-- **Keep on top** pins the Runner window above everything else. It's a live
-  toggle, so no relaunch, and it sticks when you switch versions.
-- **Packaged** launches the preview runner *with package identity* (registered as
-  a loose-layout package and activated by AUMID) instead of unpackaged. It's **on
-  by default** - so the runner has identity out of the box, handy for reproing bugs
-  that only show up when the app is packaged. Uncheck it to run unpackaged. Toggling
-  relaunches the runner, and the status line tells you which mode you're in
-  (`packaged` vs `unpackaged`).
-
-The Runner window shows your rendered snippet, a log panel, and a footer with the
-exact `Microsoft.ui.xaml.dll` version it loaded - so you always know what's really
-running.
-
-> **Careful what you paste.** The Runner compiles and runs your C# for real, with
-> **no sandbox**. Only paste code you trust. (The app warns you about this too.)
-
-## More about the repro file
+**Only run repros you trust.** The Runner compiles and runs their C# with your
+permissions and no sandbox.
 
 Two more folders hold repro files with a job to do:
 
@@ -260,7 +258,7 @@ Two more folders hold repro files with a job to do:
 | [`probes/`](../probes/) | One-file checks that settle a single question about platform behaviour, each with its measured answer and the WASDK version it was taken against |
 | [`investigations/`](../investigations/) | Bigger measurement harnesses written to chase a specific bug, each with a write-up of what it found |
 
-### Run code before XAML starts (CLI)
+### Run code before XAML starts
 
 The console host recognizes one optional launch-time hook:
 
@@ -344,31 +342,51 @@ One limit worth knowing: the runner paints its own opaque stage over the client
 area, so Win32 calls that rely on client-area transparency (DWM glass, layered
 windows) will return `S_OK` and change nothing you can see.
 
-## Build it (without running)
+## Build and run from source
 
-Everything is x64. `pack.ps1` is the normal way to build, because it also stages
-a runnable bundle. To just compile, build the projects directly:
+From the repo root:
 
 ```powershell
-dotnet build .\src\ReproStudio.Cli\ReproStudio.Cli.csproj -c Debug -p:Platform=x64
-dotnet build .\src\ReproStudio.Runner\ReproStudio.Runner.csproj -c Debug -p:Platform=x64
+dotnet build
+.\artifacts\Debug\x64\ReproStudio.exe samples\hello.cs
 ```
 
-Build the projects, not the `.slnx`. `-p:Platform` doesn't reach the projects
-through the solution file, so a solution build writes `bin\Debug\` while
-`pack.ps1` writes `bin\x64\Debug\`. Mixing the two silently leaves you running
-stale binaries.
+The projects write directly into the runnable layout:
+
+```text
+artifacts\Debug\x64\
+    ReproStudio.exe
+    runner-base\
+        ReproStudio.Runner.exe
+    samples\
+    probes\
+    investigations\
+    payload\
+```
+
+Use `dotnet build -c Release` for `artifacts\Release\x64`, or add
+`-p:Platform=ARM64` / `-p:Platform=x86` to target another architecture. Solution
+and direct project builds use the same paths. A project build only rebuilds that
+project and its references; use the solution build to refresh the whole app.
 
 Use the `dotnet` CLI (SDK 10.x), not VS2022's MSBuild, which resolves an older
 SDK and fails on net10 with NETSDK1045.
 
-A freshly built exe under `bin\` still needs a runner to drive. It has no
-`runner-base` next to it, so it falls back to the one in
-`%LOCALAPPDATA%\winui-repro-app\`, which nothing refreshes. **To test a Runner
-change, run `pack.ps1` and run from the bundle.** The console prints which runner
-it picked, so you can check:
+Saving a source repro under `samples\` updates the live preview when running it
+by its source path, as above. The output folder also carries copies of the sample
+files; rebuild to refresh those copies. The build leaves private files you drop
+into `payload\` alone.
+
+**After a Runner change, build and run from this output folder.** No packing or
+manual copy is needed. Old exes under `bin\` and previously packed bundles are not
+updated. The console prints the base it chose:
 
 ```
-runner    ...\artifacts\ReproStudio-x64\runner-base  (portable)   <- fresh
+runner    ...\artifacts\Debug\x64\runner-base  (portable)        <- fresh
 runner    ...\AppData\Local\winui-repro-app\runner-base  (dev)    <- may be old
 ```
+
+Use `.\pack.ps1` for a Release zip to share. It uses the same solution build,
+then copies the built app and the current source repros for distribution.
+Local edits or extra repros in the build output are not included. `-NoZip` skips
+compression; private DLLs in the development output's `payload\` are not included.

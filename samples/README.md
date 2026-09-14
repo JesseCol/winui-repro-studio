@@ -1,15 +1,14 @@
 # Sample repros
 
-Ready-to-open single-file repros.
+Ready-to-run single-file repros.
 
-From the console host:
+From the built or unzipped bundle folder:
 
 ```powershell
-ReproStudio.exe samples\hello.cs
+.\ReproStudio.exe samples\hello.cs
 ```
 
-From the WinUI host: hit **Open file...** and pick one. Either way the file is
-watched, so every save refreshes the runner.
+The CLI watches the file, so every save refreshes the runner. Ctrl+C stops it.
 
 | File | What it shows |
 |---|---|

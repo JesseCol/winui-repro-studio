@@ -34,12 +34,11 @@
   </ItemGroup>
 
   <!--
-    Identity manifest + assets used to give the runner package identity. It lives here
-    rather than in either host because both hosts can launch packaged, and it is
-    PackagedRunnerLauncher (in this project) that reads it.
+    Identity manifest + assets used to give the runner package identity. They live
+    beside PackagedRunnerLauncher (in this project), which reads them.
 
-    Content flows to a referencing project's output, so it lands beside whichever host
-    exe is running and resolves at AppContext.BaseDirectory\RunnerIdentity.
+    Content flows to a referencing project's output, so the CLI finds it at
+    AppContext.BaseDirectory\RunnerIdentity.
   -->
   <ItemGroup>
     <Content Include="RunnerIdentity\**\*">
