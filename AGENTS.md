@@ -37,10 +37,10 @@ Build from the repo root:
 
 ```powershell
 dotnet build
-.\artifacts\Debug\x64\ReproStudio.exe samples\hello.cs
+.\out\Debug\x64\ReproStudio.exe samples\hello.cs
 ```
 
-- The CLI builds directly into `artifacts\<Configuration>\<Platform>\` and the
+- The CLI builds directly into `out\<Configuration>\<Platform>\` and the
   Runner into its `runner-base\` subfolder. There is no separate assembly step.
 - Defaults are Debug and x64. Use `-c Release` or `-p:Platform=ARM64` / `x86`
   as needed. Solution and direct project builds use the same output layout.
@@ -54,14 +54,14 @@ dotnet build
   MSBuild's upward search from finding unrelated parent settings.
 - There are no tests. Verify by running it.
 
-**To test a Runner change, run `dotnet build` and use the exe under `artifacts`.**
+**To test a Runner change, run `dotnet build` and use the exe under `out`.**
 The build refreshes `runner-base` directly. Old exes under `bin\` or an old packed
 bundle are not refreshed and can still run stale code.
 
 The console prints which one it picked, so check it:
 
 ```
-runner    ...\artifacts\Debug\x64\runner-base  (portable)         <- fresh
+runner    ...\out\Debug\x64\runner-base  (portable)              <- fresh
 runner    ...\AppData\Local\winui-repro-app\runner-base  (dev)    <- may be old
 ```
 
@@ -75,7 +75,7 @@ when the base itself is stale.
 ```
 
 Runs the normal Release build, copies the runnable output into
-`artifacts\ReproStudio-x64\`, and zips it. Packing is only needed for distribution
+`out\ReproStudio-x64\`, and zips it. Packing is only needed for distribution
 or offline bundles, not for the local build/run loop. It ships an empty payload
 folder even if the development output has private DLLs in its payload folder.
 Samples, probes, and investigations come from source, not editable build copies.
@@ -137,8 +137,9 @@ Traps that look like the tool is broken:
   Write `System.IO.Path` in full; adding `using System.IO;` makes it worse.
 - **A missing `// wasdk:` header is silent** - the file runs against whatever the
   default resolves to. Pin it in every file you intend to compare.
-- **A compile error is invisible from outside**: no window, no crash, no output.
-  If a run produces nothing at all, suspect the compile first.
+- **A compile error is not a crash.** Check the Runner's error panel and
+  `%TEMP%\winui-repro-app\runner.log`. Headless one-shot runs also print the error
+  and return a nonzero exit code, even when an error-panel PNG was saved.
 
 `src\ReproStudio.Runner\Services\RoslynCompiler.cs` (`Usings`, line 33) lists what
 is auto-imported. Check it before adding a `using` to a repro file.

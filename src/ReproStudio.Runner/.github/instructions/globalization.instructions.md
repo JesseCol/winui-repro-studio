@@ -35,7 +35,7 @@ These rules apply to **every feature and change** involving user-facing text. Th
 
 ## Validation
 
-- Build & register the MSIX package — see **Build, Run & Deploy** in `.github/agents/Agents.md`.
+- Follow the build and run steps in the [Runner agent notes](../../AGENTS.md#build).
 - Check for hard-coded strings: search `Content="` and `Text="` in `.xaml` files — replace with `x:Uid`.
 
 ### Verification Checklist
@@ -51,5 +51,4 @@ These rules apply to **every feature and change** involving user-facing text. Th
 | 1 | [Globalize your WinUI app](https://learn.microsoft.com/en-us/windows/apps/design/globalizing/guidelines-and-checklist-for-globalizing-your-app) | Adding any new user-facing strings or culture-aware formatting |
 | 2 | [Resource Management System](https://learn.microsoft.com/en-us/windows/apps/windows-app-sdk/mrtcore/localize-strings) | Setting up or modifying `.resw` files and `ResourceLoader` usage |
 | 3 | [WinUI Localization with x:Uid](https://learn.microsoft.com/en-us/windows/apps/develop/ui-input/localizing-strings) | Binding XAML controls to localized resources via `x:Uid` |
-
 

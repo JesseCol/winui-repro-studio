@@ -66,34 +66,24 @@ internal static class Program
 
     private static async Task<int> ListVersionsAsync(AppLayout layout, CliOptions options, CancellationToken ct)
     {
-        var provisioner = new RunnerProvisioner(layout.CacheRoot);
+        using var provisioner = new RunnerProvisioner(layout.CacheRoot);
 
         IReadOnlyList<string> versions;
         try
         {
             versions = await provisioner.ListWasdkVersionsAsync(options.Prerelease, ct).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (WasdkVersionList.IsExpectedFailure(ex))
         {
             Log.Error("Could not reach NuGet: " + ex.Message);
             return 1;
         }
 
-        string provisionedRoot = Path.Combine(layout.CacheRoot, "versions");
-        HashSet<string> provisioned = Directory.Exists(provisionedRoot)
-            ? Directory.GetDirectories(provisionedRoot)
-                .Select(d => Path.GetFileName(d).Split("__")[0])
-                .ToHashSet(StringComparer.OrdinalIgnoreCase)
-            : [];
-
-        Log.Step("windows app sdk" + (options.Prerelease ? " (including prerelease)" : string.Empty));
-        foreach (string version in versions)
-        {
-            Log.Field(string.Empty, version, provisioned.Contains(version) ? "on disk" : null);
-        }
-
-        Log.Blank();
-        Log.Detail(versions.Count + " versions. A repro can say '// wasdk: 1.6' and get the newest 1.6.");
+        WasdkVersionList.Print(versions, layout.CacheRoot, options.Prerelease);
         return 0;
     }
 }

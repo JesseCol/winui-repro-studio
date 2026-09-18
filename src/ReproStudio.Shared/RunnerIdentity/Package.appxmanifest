@@ -1,17 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 
 <!--
-  Sparse-package identity for the (normally unpackaged) runner exe.
+  Package identity for the preview runner.
 
-  The "Launch packaged (with identity)" option in the host hands this manifest to
-  `winapp create-debug-identity <runner.exe>`, which registers a sparse package
-  whose external location is the runner's own folder. After that, launching the
-  runner exe runs it *with package identity* - handy for reproing bugs that only
-  show up packaged. Turning the option off unregisters it again.
-
-  This is NOT the host's own package manifest (that one lives at the project root).
-  The Executable below is resolved relative to the runner's folder (the sparse
-  package's external location), not this manifest's folder.
+  For packaged mode, PackagedRunnerLauncher copies this file as AppxManifest.xml,
+  plus the Assets folder, into the provisioned runner folder. It registers that
+  whole folder in place with PackageManager and activates the runner by AUMID.
+  No MSIX archive, sparse package, signing certificate, or winapp CLI is needed.
+  The Executable and asset paths below are relative to that registered folder.
 -->
 <Package
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"

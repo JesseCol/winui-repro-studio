@@ -52,7 +52,7 @@ build - the "base" - is found in one of two places:
 | Normal build or portable bundle | `runner-base\` next to the host exe |
 | Legacy fallback | `%LOCALAPPDATA%\winui-repro-app\runner-base` |
 
-`dotnet build` writes the CLI directly into `artifacts\<Configuration>\<Platform>\`
+`dotnet build` writes the CLI directly into `out\<Configuration>\<Platform>\`
 and the Runner into its `runner-base\` subfolder. `pack.ps1` uses that same build
 and copies the built app for distribution, taking repro files from the source
 tree rather than editable build copies. The build needs no separate step to
@@ -199,7 +199,8 @@ the host falls back to an unpackaged launch, saying so.
 
 ## The IPC: it's just a file
 
-No pipes, no sockets, no localhost server. The whole channel is one JSON file.
+No pipes, no sockets, no localhost server. The host sends a JSON request file;
+capture runs also write a JSON result beside it.
 
 1. The host makes a temp folder like
    `%TEMP%\winui-repro-app\runner-<8 hex>\request.json` (see `RunnerHost.cs`).
@@ -216,6 +217,19 @@ No pipes, no sockets, no localhost server. The whole channel is one JSON file.
 
 So "switch WASDK version" is really just "launch a different Runner exe watching
 the same request file." No rebuild. Nice and dumb.
+
+Each host write assigns a new `Snippet.RequestId`. When `--screenshot` is passed
+to the Runner, it writes `request.result.json` atomically after rendering and
+capture. `RunnerResult` records the request ID, render success/error, PNG path,
+capture method, fallback reason, and capture error separately. The CLI ignores
+results for older requests so a stale PNG or error cannot satisfy a newer run.
+
+`--headless` and the absolute `--screenshot` path travel as launch arguments in
+both packaged and unpackaged modes, not as repro headers. The CLI supplies a
+default image path in its own working directory for headless runs. It reports
+capture results while watching, and waits for the matching result in one-shot
+mode. A headless one-shot always stops its Runner; the existing visible
+no-watch mode leaves its window alive.
 
 ## Rendering a snippet
 
@@ -249,6 +263,33 @@ with Roslyn (`Microsoft.CodeAnalysis.CSharp`) in `RoslynCompiler.Compile`:
   `AssemblyLoadContext`. Each edit unloads the previous one, so hammering the
   editor doesn't leak an assembly per keystroke.
 
+When the leading comment header contains `// win32:`, `Win32Generator` merges
+the comma-separated requests into an in-memory `NativeMethods.txt`. A fresh
+`CSharpGeneratorDriver` runs CsWin32 before emit, adding bindings and recursively
+required declarations to that same compilation. Nothing is generated into the
+Runner assembly or shared between snippet assemblies. Without a request the
+generator is not loaded or run. No IPC changes are needed: the existing C# field
+preserves the complete source, including headers.
+
+The Runner references the pinned package's Roslyn 5 generator as a copy-local
+runtime library, not a build-time analyzer. Its non-framework dependencies
+(including MessagePack's StringTools dependency) are bundled beside the exe;
+the host's Roslyn and self-contained .NET provide the framework assemblies.
+`CsWin32\Windows.Win32.winmd` comes from the package's matching SDK metadata
+dependency and is passed via `build_property.CsWin32InputMetadataPaths`.
+Optional API documentation data and WDK metadata are not used. This all travels
+with the normal Runner copy/pack path: generation never probes the SDK/NuGet
+cache or downloads anything. Recheck package layout and dependency closure when
+updating CsWin32.
+
+Snippet compilation enables unsafe code and selects x64, x86 or ARM64 from the
+running process. CsWin32 uses runtime marshalling, without a second
+LibraryImport/COM source-generator pass. Generator warnings are failures too:
+CsWin32 reports unknown API names as warnings. The error text distinguishes
+generation from ordinary C# errors. Only locations in the user's syntax tree
+have the prepended-usings offset subtracted; generated files and the in-memory
+request list retain their own filenames and coordinates.
+
 **3. Wire it up.** We reflect over the compiled assembly for a `public static`
 method named `Setup`, and call it. Parameters are filled by type, so any of
 these work:
@@ -270,6 +311,35 @@ If the Runner dies before it can show anything, it writes the exception to
 `%TEMP%\winui-repro-app\runner.log`. The console host notices the process is gone
 and prints whatever was appended since it launched.
 
+## Cloaking and screenshots
+
+Headless mode applies `DWMWA_CLOAK` to the main HWND before showing the window or
+running `Setup`, verifies `DWM_CLOAKED_APP`, and shows without activation. It does
+not minimize the window or hide it with `SW_HIDE`. Additional windows opened by
+repro code are outside this guarantee.
+
+`ScreenshotCapture` keeps a `WgcFrameSource` alive before changing the scene.
+It discards the capture session's initial cached snapshot before the first
+snippet render. After layout, it waits for a compositor commit and outstanding
+DWM updates, then takes a subsequent frame. Starting a fresh WGC session after
+rendering returned stale pixels during development, even with a new timestamp.
+Do not replace this ordering with a timestamp-only check or insert artificial
+visuals into the repro to force capture.
+
+The capture path uses system D3D11/WinRT APIs and PNG encoding, with no Win2D or
+new WASDK-native dependency. Unsupported HWND capture (including Windows 10
+1809), backend errors, and bounded capture timeouts select an explicitly
+reported RenderTargetBitmap fallback. Buffer dimensions and lengths are
+validated, but black or transparent pixels are not automatically failures:
+those can be the correct output of a repro.
+
+New requests cancel and supersede older captures. Only a still-current capture
+may atomically replace the PNG and publish its matching result. File-output
+errors stay errors rather than silently changing the backend or destination.
+The fallback captures the current XAML root, not native frames or disconnected
+windows, and a successful error-panel screenshot does not erase the original
+render failure.
+
 ## Why the Runner has no XAML files
 
 The Runner is built entirely in code, no `App.xaml`, no `MainWindow.xaml`. That's
@@ -286,7 +356,7 @@ implementing `IXamlMetadataProvider`).
   packing do not automatically terminate running repros.
 - Use `dotnet` (SDK 10.x), not VS2022's MSBuild. VS resolves an older SDK and
   chokes on net10 (NETSDK1045).
-- Root build settings keep outputs under `artifacts\<Configuration>\<Platform>\`
+- Root build settings keep outputs under `out\<Configuration>\<Platform>\`
   and shield this repo from unrelated parent build settings. Don't delete them.
 - The CLI and Runner have separate output directories but share one output root.
   `pack.ps1` asks MSBuild for `OutDir`, which can be an absolute path.

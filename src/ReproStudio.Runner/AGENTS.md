@@ -49,7 +49,36 @@ That is the floor for this project.
 at the base version even when the native DLLs are older, so a call that compiles
 fine can hit a native entry point that does not exist on an older runtime.
 
+## Launch modes
+
+The same runner supports both unpackaged and packaged launches. From the repo
+root after building:
+
+```powershell
+.\out\Debug\x64\ReproStudio.exe samples\hello.cs --unpackaged
+.\out\Debug\x64\ReproStudio.exe samples\hello.cs --packaged
+```
+
+`--packaged` (or `// packaged: yes`) uses `PackagedRunnerLauncher` in Shared to
+copy `RunnerIdentity\Package.appxmanifest` and its assets into the provisioned
+runner folder, register that whole folder, and activate it with package identity.
+It needs Developer Mode. If registration fails, the CLI warns and falls back to
+unpackaged mode, so do not count a fallback as a successful packaged-mode run.
+
+Do not add an MSIX installer, signing certificates, or a `winapp` dependency to
+this workflow. Keep the identity manifest and its assets. The separate
+`app.manifest` supplies Win32 compatibility and DPI settings and must also stay.
+
 ## Debugging a runner that will not start
+
+`--headless --no-watch` on the CLI cloaks the Runner, captures `ReproStudio.png`
+in the working directory, and stops it. The CLI reports whether the image came
+from WGC or the XAML-only RenderTargetBitmap fallback. Only the main HWND is
+cloaked; arbitrary windows opened by repro code are not.
+
+Keep WGC active before changing the scene and discard its initial cached frame.
+Starting a capture session after rendering can return old pixels with a new
+timestamp. Do not add capture-only visuals to make the repro render differently.
 
 It has no console. Unhandled exceptions go to
 `%TEMP%\winui-repro-app\runner.log`. The console host prints whatever was appended
@@ -71,7 +100,7 @@ A running Runner **locks its own exe**, so close it if it is running directly
 from the build output before rebuilding.
 
 The Runner builds directly into
-`artifacts\<Configuration>\<Platform>\runner-base\`. The CLI is one level above.
+`out\<Configuration>\<Platform>\runner-base\`. The CLI is one level above.
 After changing anything here, rebuild and run
-`.\artifacts\Debug\x64\ReproStudio.exe samples\hello.cs` from the repo root.
+`.\out\Debug\x64\ReproStudio.exe samples\hello.cs` from the repo root.
 No packing or manual copy is needed. `--doctor` shows which base is in use.

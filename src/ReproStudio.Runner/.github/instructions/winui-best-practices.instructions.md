@@ -5,7 +5,11 @@ applyTo: '**/*.cs, **/*.xaml, **/*.csproj'
 
 # WinUI 3 / WinAppSDK -- Best Practices & Patterns
 
-This file covers WinUI 3-specific patterns, conventions, and architecture guidance for this project.
+The [Runner agent notes](../../AGENTS.md) define this project's architecture and
+build/launch workflow. The examples below are general WinUI reference, not the
+Runner's file layout. The Runner is code-only: do not add compiled XAML or an
+MSIX installer. Compiled-XAML and `x:Bind` examples do not apply to its
+runtime-loaded repro markup.
 
 ---
 
@@ -295,7 +299,9 @@ if (Content is FrameworkElement rootElement)
 
 ## 7. System Backdrop (Mica / Acrylic)
 
-This project uses **Mica** backdrop (already configured in `MainWindow.xaml`):
+A WinUI app with compiled XAML can declare Mica as below. The Runner has no
+`MainWindow.xaml`; configure any backdrop in C# and check availability against
+the Windows 10 1809 floor.
 
 ```xml
 <Window.SystemBackdrop>
@@ -342,8 +348,8 @@ Alternatives:
 | Using `Windows.UI.Xaml` namespace | Use `Microsoft.UI.Xaml` for WinUI 3 |
 | Calling `Window.Current` | Not available in WinUI 3 -- pass window reference explicitly |
 | Using `CoreDispatcher` | Use `DispatcherQueue` instead |
-| `REGDB_E_CLASSNOTREG` error | Ensure Developer Mode is enabled, then re-register: run `winapp unregister` followed by `dotnet run` (or `winapp run <build-output>`) to refresh the loose-layout registration |
-| Stale package state after manifest changes | Run `winapp unregister`, then `dotnet run` -- using `winapp run --clean` additionally wipes `LocalState`/settings to test first-run behavior |
+| Runner registration or activation fails | Run the CLI's `--doctor` command and inspect the reported error. Packaged mode needs Developer Mode and the RunnerIdentity assets; do not add installer tooling as a workaround. |
+| Package manifest changes | Rebuild and restart through the CLI's `--packaged` option so it stages and registers the manifest. Keep its identity fields in sync with `PackagedRunnerLauncher`. |
 | XAML Designer crashes | Clean & rebuild; ensure platform matches (x64 vs AnyCPU) |
 | `{Binding}` not updating | Switch to `x:Bind` with `Mode=OneWay` or `Mode=TwoWay` |
 
@@ -351,13 +357,14 @@ Alternatives:
 
 ## 10. Validation
 
-Build & register the MSIX package -- see **Build, Run & Deploy** in `.github/agents/Agents.md`.
+Follow the [Runner build steps](../../AGENTS.md#build) and
+[launch-mode instructions](../../AGENTS.md#launch-modes). No MSIX archive or
+certificate setup is needed.
 
 ### Verify
 
 - Run the app and verify the changed UI renders correctly on x64.
-- Search XAML for `{Binding` -- replace with `x:Bind`.
-- Search XAML for `Foreground="#` or `Background="#` -- replace with `{ThemeResource}`.
+- Do not apply compiled-XAML rewrites to runtime repro markup.
 - Search C# for `Windows.UI.Xaml` -- replace with `Microsoft.UI.Xaml`.
 - Search C# for `Window.Current` -- replace with explicit window reference.
 - Search C# for `CoreDispatcher` -- replace with `DispatcherQueue`.
@@ -416,5 +423,4 @@ Build & register the MSIX package -- see **Build, Run & Deploy** in `.github/age
 | 19 | [Windows App SDK Samples](https://github.com/microsoft/WindowsAppSDK-Samples) | **Always search here first** before implementing any SDK API for the first time |
 | 20 | [WinUI 3 Demos](https://github.com/microsoft/WinUI-Gallery) | Reference implementations and patterns |
 | 21 | [Windows AI API Samples](https://github.com/microsoft/WindowsAppSDK-Samples/tree/main/Samples/WindowsAIFoundry/cs-winui) | AI API usage with WinUI (ImageDescription, TextRecognizer, LanguageModel, etc.) |
-
 

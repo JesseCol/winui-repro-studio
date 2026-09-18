@@ -11,11 +11,12 @@ Back to the [README](../README.md).
 .\pack.ps1
 ```
 
-That produces `artifacts\ReproStudio-x64.zip`. Unzip it anywhere on the target
-machine and run it:
+That produces `out\ReproStudio-x64.zip`. Unzip it anywhere on the target
+machine and run it. The zip includes the samples, this `docs` folder, and
+`README.md`, so the guide and its relative links are available offline:
 
 ```powershell
-.\ReproStudio.exe samples\hello.cs
+.\ReproStudio.exe
 ```
 
 The target machine needs **nothing installed** - no SDK, no .NET runtime, no
@@ -35,17 +36,24 @@ came from, what's in the cache, and whether Developer Mode is on.
 ## CLI options
 
 ```powershell
-.\ReproStudio.exe <file.cs> [options]
+.\ReproStudio.exe [file.cs] [options]
 ```
+
+Without a file, launch commands use `samples\hello.cs` relative to the executable,
+not the working directory. For example, `.\ReproStudio.exe --wasdk 2.2` opens the
+default sample on that version. `--help`, `--list`, and `--doctor` remain
+standalone commands and do not launch a preview.
 
 | Option | What |
 |---|---|
-| `--wasdk <version>` | WASDK version. Partial is fine (`1.6` picks the newest 1.6). Overrides the file header. |
+| `--wasdk <version>` | WASDK version. Partial is fine (`2.2` picks the newest 2.2). Overrides the file header. |
 | `--winui <ver\|path>` | Override just the WinUI component: a version, or a local `.nupkg`. |
 | `--payload <dir>` | Copy every file in `<dir>` over the runner. The quick way to test a private build. `none` disables it. |
 | `--packaged` / `--unpackaged` | Force package identity on or off. |
 | `--prerelease` | Include prerelease versions when resolving and listing. |
-| `--no-watch` | Launch and exit, leaving the runner running. |
+| `--headless` | Cloak the Runner and save `ReproStudio.png` in the invoking working directory after each render. |
+| `--screenshot <path.png>` | Choose a screenshot path, relative to the invoking working directory. Also works without `--headless`. |
+| `--no-watch` | Skip watching. With headless capture, wait for the image and stop the Runner; otherwise leave the visible Runner running. |
 | `--provision-only` | Prepare the runner, then exit without launching. Warms the cache. |
 | `--clear-cache` | Delete provisioned runners first (downloads are kept). |
 | `--list` | List available WASDK versions and exit. |
@@ -60,6 +68,95 @@ instead. If the runner dies on its own, the console says so and prints whatever
 the runner appended to its crash log.
 
 Ctrl+C stops the runner and unregisters the package.
+
+Press **V** in the watching console to list WASDK versions without restarting
+the preview. Copy a listed version into the file's `// wasdk:` header and save.
+The shortcut uses that repro's NuGet configuration and the launch's
+`--prerelease` setting. Successful lookups are reused for the session.
+
+The full **Edit and save** path is printed after startup, version lists, and
+reloads, so the file to edit stays easy to find. A slow or failed version lookup
+does not stop the preview or prevent edits from being pushed.
+
+With redirected console input, use `.\ReproStudio.exe --list` in another
+terminal instead. Add `--prerelease` to include previews. Neither shortcut changes
+the repro file for you, and an explicit `--wasdk` argument still overrides its header.
+
+## Headless runs and screenshots
+
+From the repository root:
+
+```powershell
+dotnet build
+.\out\Debug\x64\ReproStudio.exe samples\cswin32.cs --headless --no-watch --payload none
+```
+
+This cloaks the real Runner window, saves `ReproStudio.png` in the current
+working directory, then stops the Runner. The PNG is not written beside the
+executable or repro unless that happens to be the working directory. The CLI
+prints the absolute image path, capture method, and Runner log path.
+
+To keep watching, omit `--no-watch`. The initial render and each saved edit
+produce a new image at the same path. Ctrl+C stops the hidden Runner.
+To choose a path, add `--screenshot captures\bug.png`; relative paths are
+resolved by the CLI, which creates missing parent folders, so packaged launches
+use the same location.
+`--screenshot` also works with a visible Runner. With visible `--no-watch`,
+the CLI waits for the image but leaves the window open.
+
+The preferred backend is **Windows.Graphics.Capture**, targeting the main
+Runner HWND while it stays cloaked. This captures the composed window, including
+the native frame when supplied by Windows; it does not re-render the XAML tree.
+If it is unsupported or fails, the Runner reports the reason
+and tries **RenderTargetBitmap** on the Runner's XAML root instead. A fallback
+is labeled in the console and log: it is not presented as a full window capture.
+Failure to write the requested file is an error, not a reason to silently
+choose another folder. PNGs are replaced atomically after capture completes.
+
+### Know which image you got
+
+The completion line names the backend:
+
+```text
+screenshot: C:\my-repro\ReproStudio.png (Windows.Graphics.Capture)
+```
+
+| Backend | What the PNG contains |
+|---|---|
+| `Windows.Graphics.Capture` | The composed main Runner window, including its frame where available. Separate windows are not automatically combined into the image. |
+| `RenderTargetBitmap` | A XAML-only snapshot. The console also explains why WGC could not capture it. This is not equivalent evidence for a native/composition bug. |
+
+Render failures are reported even if the error panel can be captured.
+One-shot capture returns `1` for render/capture failure,
+an early crash, or no completed result within 60 seconds. An older PNG may
+remain after a failed capture; the CLI will not report it as a new success.
+Watching stays alive after a bad edit so saving a correction can recover.
+
+Errors, fallback reasons, and calls to `Log(...)` also go to the existing
+Runner log, not a new log in the working directory:
+
+```powershell
+Get-Content "$env:TEMP\winui-repro-app\runner.log" -Tail 50
+```
+
+Use a different `--screenshot` path for each concurrent run so their images
+do not overwrite each other.
+
+### Capture limits
+
+- HWND-based Windows.Graphics.Capture needs Windows 10 1903 or newer.
+  Windows 10 1809 uses the explicitly reported XAML fallback.
+- RenderTargetBitmap captures the preview, error panel, log, and footer, but
+  excludes the native frame, disconnected popups, and unsupported non-XAML content.
+- A window capture is not necessarily identical to final desktop pixels.
+  For DWM frame, border, transparency, or foreground/focus investigations,
+  use a visible run and an actual desktop capture.
+- Headless cloaks the main Runner HWND, not additional windows that arbitrary
+  repro code creates or shows in `OnProcessLaunch`. It is not a sandbox.
+- Cloaked does not mean a desktop-free rendering service. A working graphical
+  session is still needed; disconnected or non-rendering VM sessions can fail.
+- Images are taken after render requests, not continuously as animations,
+  asynchronous work, or interactions change the app.
 
 ## Test a private build: the payload folder
 
@@ -218,7 +315,7 @@ and an optional `Setup` method:
 
 ```csharp
 // repro: My cool bug
-// wasdk: 1.7
+// wasdk: 2.2
 
 class Repro
 {
@@ -269,9 +366,10 @@ static void OnProcessLaunch()
 }
 ```
 
-The CLI compiles and invokes this parameterless `static void` method before
-`Application.Start`, so it can configure process-wide state that must be set before
-XAML initializes. `EnableXamlOptionalChange` takes the numeric `XamlChangeId`, which
+At the CLI's request, the Runner compiles and invokes this parameterless
+`static void` method before `Application.Start`, so it can configure process-wide
+state that must be set before XAML initializes. `EnableXamlOptionalChange` takes
+the numeric `XamlChangeId`, which
 also works when the runner's pinned managed projection predates that enum member.
 
 Changing `OnProcessLaunch` changes the CLI's launch plan and restarts the Runner.
@@ -287,7 +385,8 @@ a helper or constant outside it does not trigger a relaunch.
 `wasdk: 1.7` is enough. It matches your text against the real version list by
 dotted segments and picks the newest one that fits, so `1.7` finds
 `1.7.250401001`. An exact version still works too - and if you write a full
-version, no version list is fetched at all, so a fully pinned repro runs offline.
+version, no version list is fetched at all. A fully pinned repro runs offline
+once its runtime packages are cached or included in an offline bundle.
 
 ### Packaged mode needs Developer Mode
 
@@ -313,7 +412,7 @@ Microsoft.UI.Xaml.Controls.Primitives  Microsoft.UI.Windowing
 Windows.Graphics                       static ReproStudio_Runner.ReproApi
 ```
 
-That means `[DllImport]` works, which is how you repro anything that needs Win32.
+That means `[DllImport]` works for repros that need Win32.
 Take the `Window` that `Setup` hands you and turn it into an HWND:
 
 ```csharp
@@ -338,6 +437,34 @@ class Repro
 A fuller example, calling `DwmExtendFrameIntoClientArea`, is in
 [`samples/pinvoke.cs`](../samples/pinvoke.cs).
 
+For generated bindings instead, put this before the first `using` or class:
+
+```csharp
+// win32: GetWindowRect, GetDpiForWindow
+```
+
+CsWin32 generates `Windows.Win32.PInvoke` and its supporting types directly in
+the snippet assembly. Add `using Windows.Win32;` and, for `HWND`/`RECT`,
+`using Windows.Win32.Foundation;`. The Runner supplies `NativeMethods.txt` in
+memory; no per-repro project or on-disk API list is necessary. Repeated headers
+merge comma-separated names, and changes regenerate on save. Unknown names and
+generator warnings/errors fail visibly. Only the leading comment header is read.
+The generator, dependencies and Win32 metadata ship with the Runner, so generation
+does not need an SDK, NuGet cache or network (WASDK provisioning still may).
+Generated code supports unsafe declarations and targets the Runner's x64, x86
+or ARM64 architecture. API availability on the target OS remains your responsibility.
+
+Run the rectangle/DPI demo from the repository root:
+
+```powershell
+dotnet build
+.\out\Debug\x64\ReproStudio.exe samples\cswin32.cs
+```
+
+See [`samples/cswin32.cs`](../samples/cswin32.cs) and the
+[header rules](../samples/README.md#writing-your-own). Add `--payload none`
+for a stock runtime, ignoring any private payload beside the executable.
+
 One limit worth knowing: the runner paints its own opaque stage over the client
 area, so Win32 calls that rely on client-area transparency (DWM glass, layered
 windows) will return `S_OK` and change nothing you can see.
@@ -348,13 +475,13 @@ From the repo root:
 
 ```powershell
 dotnet build
-.\artifacts\Debug\x64\ReproStudio.exe samples\hello.cs
+.\out\Debug\x64\ReproStudio.exe samples\hello.cs
 ```
 
 The projects write directly into the runnable layout:
 
 ```text
-artifacts\Debug\x64\
+out\Debug\x64\
     ReproStudio.exe
     runner-base\
         ReproStudio.Runner.exe
@@ -364,7 +491,7 @@ artifacts\Debug\x64\
     payload\
 ```
 
-Use `dotnet build -c Release` for `artifacts\Release\x64`, or add
+Use `dotnet build -c Release` for `out\Release\x64`, or add
 `-p:Platform=ARM64` / `-p:Platform=x86` to target another architecture. Solution
 and direct project builds use the same paths. A project build only rebuilds that
 project and its references; use the solution build to refresh the whole app.
@@ -382,7 +509,7 @@ manual copy is needed. Old exes under `bin\` and previously packed bundles are n
 updated. The console prints the base it chose:
 
 ```
-runner    ...\artifacts\Debug\x64\runner-base  (portable)        <- fresh
+runner    ...\out\Debug\x64\runner-base  (portable)             <- fresh
 runner    ...\AppData\Local\winui-repro-app\runner-base  (dev)    <- may be old
 ```
 

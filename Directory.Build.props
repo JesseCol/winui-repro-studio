@@ -10,7 +10,7 @@
     <Platform Condition="'$(Platform)' == '' and '$(RuntimeIdentifier)' == 'win-arm64'">ARM64</Platform>
     <Platform Condition="'$(Platform)' == '' and '$(RuntimeIdentifier)' == 'win-x86'">x86</Platform>
     <Platform Condition="'$(Platform)' == ''">x64</Platform>
-    <BundleRoot Condition="'$(BundleRoot)' == ''">$([MSBuild]::NormalizeDirectory('$(MSBuildThisFileDirectory)', 'artifacts', '$(Configuration)', '$(Platform)'))</BundleRoot>
+    <BundleRoot Condition="'$(BundleRoot)' == ''">$([MSBuild]::NormalizeDirectory('$(MSBuildThisFileDirectory)', 'out', '$(Configuration)', '$(Platform)'))</BundleRoot>
     <!-- Outputs are project-specific even outside src; let Clean track dependency copies. -->
     <TrackFileWritesShareableOutsideOfProjectDirectory>true</TrackFileWritesShareableOutsideOfProjectDirectory>
   </PropertyGroup>

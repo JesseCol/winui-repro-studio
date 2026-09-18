@@ -22,6 +22,18 @@ public static class Program
     {
         WinRT.ComWrappersSupport.InitializeComWrappers();
         string[] commandLine = Environment.GetCommandLineArgs();
+        if (!App.TryParseCaptureOptions(commandLine, out bool isHeadless, out string? screenshotPath, out string? error))
+        {
+            CrashLog.Log("Runner arguments: " + error);
+            Environment.ExitCode = 1;
+            return;
+        }
+
+        if (isHeadless)
+        {
+            CrashLog.Log("Headless mode cloaks only the Runner HWND. Windows created by snippet code are outside this scope.");
+        }
+
         if (HasArgument(commandLine, "--run-process-launch"))
         {
             try
@@ -40,7 +52,7 @@ public static class Program
         {
             var context = new DispatcherQueueSynchronizationContext(DispatcherQueue.GetForCurrentThread());
             SynchronizationContext.SetSynchronizationContext(context);
-            _ = new App();
+            _ = new App(isHeadless, screenshotPath);
         });
     }
 
@@ -60,10 +72,14 @@ public static class Program
 public partial class App : Application, IXamlMetadataProvider
 {
     private readonly XamlControlsXamlMetaDataProvider _provider = new();
+    private readonly bool _isHeadless;
+    private readonly string? _screenshotPath;
     private Window? _window;
 
-    public App()
+    public App(bool isHeadless = false, string? screenshotPath = null)
     {
+        _isHeadless = isHeadless;
+        _screenshotPath = screenshotPath;
         UnhandledException += (s, e) =>
         {
             CrashLog.Log("UnhandledException: " + e.Message + Environment.NewLine + e.Exception);
@@ -90,8 +106,73 @@ public partial class App : Application, IXamlMetadataProvider
         string[] commandLine = Environment.GetCommandLineArgs();
         string? requestPath = ParseRequestPath(commandLine);
         RunnerBounds? bounds = ParseBounds(commandLine);
-        _window = new MainWindow(requestPath, bounds);
-        _window.Activate();
+        try
+        {
+            _window = new MainWindow(requestPath, bounds, _isHeadless, _screenshotPath);
+            if (_isHeadless)
+            {
+                // The constructor cloaks and verifies the HWND before running any Setup.
+                // Show without activation, rather than hiding/minimizing or briefly activating.
+                _window.AppWindow.Show(false);
+                WindowCaptureInterop.VerifyAppCloak(WinRT.Interop.WindowNative.GetWindowHandle(_window));
+            }
+            else
+            {
+                _window.Activate();
+            }
+        }
+        catch (Exception ex) when (_isHeadless && CaptureFailures.IsExpected(ex))
+        {
+            CrashLog.Log("Headless startup failed (not showing a visible window): " + ex);
+            Environment.ExitCode = 1;
+            _window?.Close();
+            Exit();
+        }
+    }
+
+    internal static bool TryParseCaptureOptions(
+        string[] args, out bool isHeadless, out string? screenshotPath, out string? error)
+    {
+        isHeadless = false;
+        screenshotPath = null;
+        error = null;
+        for (int i = 1; i < args.Length; i++)
+        {
+            if (string.Equals(args[i], "--headless", StringComparison.OrdinalIgnoreCase))
+            {
+                isHeadless = true;
+            }
+            else if (string.Equals(args[i], "--screenshot", StringComparison.OrdinalIgnoreCase))
+            {
+                if (screenshotPath is not null || i + 1 == args.Length || args[i + 1].StartsWith("--", StringComparison.Ordinal))
+                {
+                    error = "--screenshot requires exactly one absolute PNG path.";
+                    return false;
+                }
+
+                screenshotPath = args[++i];
+            }
+        }
+
+        if (isHeadless && screenshotPath is null)
+        {
+            error = "--headless requires --screenshot <absolute-path.png>.";
+        }
+        else if (screenshotPath is not null
+            && (!Path.IsPathFullyQualified(screenshotPath)
+                || !string.Equals(Path.GetExtension(screenshotPath), ".png", StringComparison.OrdinalIgnoreCase)
+                || screenshotPath.IndexOfAny(Path.GetInvalidPathChars()) >= 0))
+        {
+            error = "--screenshot must be an absolute path ending in .png.";
+        }
+        else if (screenshotPath is not null
+            && (string.IsNullOrWhiteSpace(ParseRequestPath(args))
+                || ParseRequestPath(args)!.StartsWith("--", StringComparison.Ordinal)))
+        {
+            error = "Screenshot capture requires --request <path>.";
+        }
+
+        return error is null;
     }
 
     internal static string? ParseRequestPath(string[] args)

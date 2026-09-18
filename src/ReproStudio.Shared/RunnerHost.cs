@@ -39,11 +39,25 @@ public sealed class RunnerHost : IDisposable
     }
 
     /// <summary>Whether the runner started, and a short note describing the identity mode.</summary>
-    public readonly record struct LaunchResult(bool Launched, string ModeNote);
+    public readonly record struct LaunchResult(bool Launched, string ModeNote)
+    {
+        /// <summary>True only when the launched process has package identity.</summary>
+        public bool IsPackaged { get; init; }
+    }
 
     public int? ProcessId => _process is { HasExited: false } ? _process.Id : null;
 
-    public void WriteRequest(Snippet snippet) => SnippetIo.WriteAtomic(_requestPath, snippet);
+    public string ResultPath => RunnerResultIo.GetPath(_requestPath);
+
+    public Guid WriteRequest(Snippet snippet)
+    {
+        ArgumentNullException.ThrowIfNull(snippet);
+        snippet.RequestId = Guid.NewGuid();
+        SnippetIo.WriteAtomic(_requestPath, snippet);
+        return snippet.RequestId;
+    }
+
+    public RunnerResult? ReadResult() => RunnerResultIo.TryRead(ResultPath);
 
     /// <summary>
     /// Launches the runner at <paramref name="exePath"/> watching our request file, replacing any
@@ -56,7 +70,9 @@ public sealed class RunnerHost : IDisposable
         string exePath,
         (int X, int Y, int Width, int Height)? bounds,
         bool packaged,
-        bool runProcessLaunch = false)
+        bool runProcessLaunch = false,
+        bool headless = false,
+        string? screenshotPath = null)
     {
         ArgumentNullException.ThrowIfNull(exePath);
 
@@ -66,14 +82,14 @@ public sealed class RunnerHost : IDisposable
             return new LaunchResult(false, string.Empty);
         }
 
-        List<string> args = BuildArgs(bounds, runProcessLaunch);
+        List<string> args = BuildArgs(bounds, runProcessLaunch, headless, screenshotPath);
 
         if (packaged)
         {
             (bool launched, string? failure) = await TryLaunchPackagedAsync(exePath, args).ConfigureAwait(false);
             if (launched)
             {
-                return new LaunchResult(true, " (packaged)");
+                return new LaunchResult(true, " (packaged)") { IsPackaged = true };
             }
 
             // Fall back to an unpackaged launch so the tool stays usable, noting why.
@@ -151,12 +167,25 @@ public sealed class RunnerHost : IDisposable
 
     private List<string> BuildArgs(
         (int X, int Y, int Width, int Height)? bounds,
-        bool runProcessLaunch)
+        bool runProcessLaunch,
+        bool headless,
+        string? screenshotPath)
     {
         var args = new List<string> { "--request", _requestPath };
         if (runProcessLaunch)
         {
             args.Add("--run-process-launch");
+        }
+
+        if (headless)
+        {
+            args.Add("--headless");
+        }
+
+        if (screenshotPath is not null)
+        {
+            args.Add("--screenshot");
+            args.Add(screenshotPath);
         }
 
         if (bounds is (int x, int y, int width, int height))
@@ -195,6 +224,10 @@ public sealed class RunnerHost : IDisposable
             if (_process is { HasExited: false })
             {
                 _process.Kill();
+                if (!_process.WaitForExit(5000))
+                {
+                    throw new TimeoutException("The Runner did not exit within five seconds after being stopped.");
+                }
             }
         }
         catch (InvalidOperationException)

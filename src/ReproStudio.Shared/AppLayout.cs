@@ -98,5 +98,5 @@ public sealed class AppLayout
         $"Base runner missing (looked in {BaseRunnerDir}). "
         + "The runner-base folder should sit next to ReproStudio.exe. "
         + "From source, run dotnet build at the repo root and use the exe under "
-        + "artifacts\\<Configuration>\\<Platform>. For a downloaded bundle, re-extract the zip.";
+        + "out\\<Configuration>\\<Platform>. For a downloaded bundle, re-extract the zip.";
 }

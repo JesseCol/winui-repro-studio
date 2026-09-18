@@ -10,6 +10,9 @@ public sealed class Snippet
     /// <summary>Lets the format evolve without breaking older files.</summary>
     public int SchemaVersion { get; set; } = 1;
 
+    /// <summary>IPC correlation for this render request; assigned by the host.</summary>
+    public Guid RequestId { get; set; }
+
     public string? Title { get; set; }
 
     public string? Notes { get; set; }

@@ -5,7 +5,10 @@ applyTo: '**/*Tests.cs, **/*Test.cs, **/*.Tests.csproj'
 
 # Testing — Unit Tests, Build & Run
 
-Every public method and class must have corresponding unit tests. Tests are not optional.
+This repo currently has no test project. For current changes, follow the
+[Runner build steps](../../AGENTS.md#build) and exercise the relevant
+[launch modes](../../AGENTS.md#launch-modes). The sections below are guidance
+for a future test project, not a requirement to add test tooling during a cleanup.
 
 ---
 
@@ -167,7 +170,7 @@ public class MainViewModelTests
 
 ### Running Tests On-Demand
 
-After a change, run only the tests related to the affected area instead of the full suite. Detect the platform first (matching the convention in `.github/agents/Agents.md`):
+After a change, run only the tests related to the affected area instead of the full suite. Use the same target platform as the app build:
 
 ```powershell
 # Run from the test project folder
@@ -192,13 +195,12 @@ dotnet test -c Debug -p:Platform=$Platform --filter "FullyQualifiedName~Tests.Vi
 # Run the full suite (for cross-cutting changes)
 dotnet test -c Debug -p:Platform=$Platform
 ```
-```
 
 ---
 
 ## 4. Test-Specific Commands
 
-For general build and register commands, see **Build, Run & Deploy** in `.github/agents/Agents.md`.
+For app builds and both launch modes, see the [Runner agent notes](../../AGENTS.md).
 For on-demand test filtering, see **Running Tests On-Demand** above.
 
 Below are additional test commands:
@@ -222,11 +224,11 @@ dotnet test -c Debug -p:Platform=$Platform --verbosity normal
 
 ## 5. Agent Workflow for Tests
 
-When you write or modify code, follow this sequence:
+When a test project exists, follow this sequence:
 
 1. **Implement the feature or fix** in the main project.
 2. **Write unit tests** for every new/changed public method.
-3. **Build** — see **Build, Run & Deploy** in `.github/agents/Agents.md`. Fix all errors and warnings.
+3. **Build** - see the [Runner agent notes](../../AGENTS.md#build). Fix all errors and warnings.
 4. **Run tests** — `dotnet test -c Debug -p:Platform=$Platform` (from the test project folder; detect `$Platform` as shown above) and ensure all pass.
 5. **Review** — Confirm tests cover the happy path, edge cases, and error cases.
 
@@ -260,7 +262,7 @@ When you write or modify code, follow this sequence:
 
 ## Validation
 
-- Build & run tests — see **Build, Run & Deploy** in `.github/agents/Agents.md`.
+- Follow the [Runner build steps](../../AGENTS.md#build), then run the relevant tests if a test project exists.
 - Verify all tests pass — zero failures, zero skipped without justification.
 - Verify naming follows `MethodName_Scenario_ExpectedResult` pattern.
 - Verify AAA structure (Arrange/Act/Assert) in every test method.
@@ -280,5 +282,3 @@ When you write or modify code, follow this sequence:
 | 4 | [FluentAssertions Documentation](https://fluentassertions.com/introduction) | Writing expressive assertions (`Should().Be()`, collections, exceptions) |
 | 5 | [dotnet test CLI](https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-test) | Running tests from terminal, filtering, verbosity options |
 | 6 | [Test Explorer in Visual Studio](https://learn.microsoft.com/en-us/visualstudio/test/run-unit-tests-with-test-explorer) | Debugging tests, viewing coverage, understanding test output |
-
-

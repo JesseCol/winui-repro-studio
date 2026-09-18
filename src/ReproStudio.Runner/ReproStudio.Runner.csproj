@@ -43,9 +43,46 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.3.0" />
+    <!-- Used by the snippet compiler at runtime, not as a Runner build analyzer. -->
+    <PackageReference Include="Microsoft.Windows.CsWin32" Version="0.3.333"
+                      GeneratePathProperty="true" ExcludeAssets="all" PrivateAssets="all" />
+    <!-- Match CsWin32's metadata dependency; never resolve metadata from an SDK at runtime. -->
+    <PackageReference Include="Microsoft.Windows.SDK.Win32Metadata" Version="71.0.14-preview"
+                      GeneratePathProperty="true" ExcludeAssets="all" PrivateAssets="all" />
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="$(WasdkVersion)" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2270" />
   </ItemGroup>
+
+  <PropertyGroup>
+    <!-- This is the Roslyn 5 leg of the pinned package, compatible with our Roslyn 5.3 host. -->
+    <CsWin32AnalyzerDir>$(PkgMicrosoft_Windows_CsWin32)\analyzers\dotnet\roslyn5.0\cs</CsWin32AnalyzerDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Ordinary copy-local references put the generator and dependencies in deps.json.
+         Keep the host's Roslyn and self-contained .NET assemblies, not the analyzer's
+         older System.* copies. StringTools is a MessagePack dependency that the package
+         ships only with its build tool. Recheck this closure when updating CsWin32. -->
+    <CsWin32RuntimeAssembly Include="$(CsWin32AnalyzerDir)\*.dll"
+                            Exclude="$(CsWin32AnalyzerDir)\System.*.dll;$(CsWin32AnalyzerDir)\Microsoft.CodeAnalysis*.dll" />
+    <CsWin32RuntimeAssembly Include="$(PkgMicrosoft_Windows_CsWin32)\build\tools\Microsoft.NET.StringTools.dll" />
+    <Reference Include="@(CsWin32RuntimeAssembly)" Private="true" />
+    <Content Include="$(PkgMicrosoft_Windows_SDK_Win32Metadata)\Windows.Win32.winmd"
+             Link="CsWin32\Windows.Win32.winmd" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="$(PkgMicrosoft_Windows_SDK_Win32Metadata)\sdk_license.txt"
+             Link="CsWin32\sdk_license.txt" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="$(PkgMicrosoft_Windows_CsWin32)\NOTICE.txt"
+             Link="CsWin32\NOTICE.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="ValidateCsWin32RuntimeAssets" BeforeTargets="ResolveAssemblyReferences">
+    <Error Condition="!Exists('$(CsWin32AnalyzerDir)\Microsoft.Windows.CsWin32.dll')"
+           Text="CsWin32's Roslyn 5 generator is missing. Restore packages or update the runtime asset layout." />
+    <Error Condition="!Exists('%(CsWin32RuntimeAssembly.Identity)')"
+           Text="Missing CsWin32 runtime dependency: %(CsWin32RuntimeAssembly.Identity)" />
+    <Error Condition="!Exists('$(PkgMicrosoft_Windows_SDK_Win32Metadata)\Windows.Win32.winmd')"
+           Text="CsWin32's Windows.Win32.winmd is missing. Restore packages or update the metadata layout." />
+  </Target>
 
   <ItemGroup>
     <!-- Carry an inferred Platform through even when the SDK strips the app RID. -->

@@ -26,9 +26,14 @@ internal sealed class ReproSession : IDisposable
     /// <summary>How often to notice that the runner died on its own.</summary>
     private static readonly TimeSpan HealthInterval = TimeSpan.FromSeconds(1);
 
+    private static readonly TimeSpan KeyboardPollInterval = TimeSpan.FromMilliseconds(100);
+
+    private static readonly TimeSpan CaptureTimeout = TimeSpan.FromSeconds(60);
+
     private readonly CliOptions _options;
     private readonly AppLayout _layout;
     private readonly string _filePath;
+    private readonly string? _screenshotPath;
 
     private readonly RunnerProvisioner _provisioner;
     private readonly RunnerHost _host;
@@ -41,8 +46,12 @@ internal sealed class ReproSession : IDisposable
     private System.Threading.Timer? _debounce;
     private CancellationToken _ct;
 
-    /// <summary>WASDK versions from NuGet, fetched at most once per run.</summary>
-    private IReadOnlyList<string>? _versions;
+    private readonly object _versionsLock = new();
+
+    /// <summary>Shared by version resolution and the console shortcut; failed lookups can retry.</summary>
+    private Task<IReadOnlyList<string>>? _versionsTask;
+
+    private volatile bool _canReadKeys;
 
     /// <summary>
     /// The last version we told the user a partial token resolved to. Watch mode
@@ -55,6 +64,10 @@ internal sealed class ReproSession : IDisposable
 
     /// <summary>Size of runner.log when we launched, so a crash report shows only new lines.</summary>
     private long _logOffset;
+    private Guid _requestId;
+    private Guid _reportedCapture;
+    private Guid _timedOutCapture;
+    private long _captureDeadline;
 
     public ReproSession(CliOptions options, AppLayout layout)
     {
@@ -63,7 +76,12 @@ internal sealed class ReproSession : IDisposable
 
         _options = options;
         _layout = layout;
-        _filePath = Path.GetFullPath(options.File!);
+        _filePath = options.File is { } file
+            ? Path.GetFullPath(file)
+            : Path.Combine(AppContext.BaseDirectory, "samples", "hello.cs");
+        _screenshotPath = options.Screenshot is { } screenshot
+            ? Path.GetFullPath(screenshot)
+            : options.Headless ? Path.GetFullPath("ReproStudio.png") : null;
 
         // A nuget.config next to the repro file is honoured, so a repro can travel with
         // the feed it needs (an internal WinUI feed, say).
@@ -84,21 +102,31 @@ internal sealed class ReproSession : IDisposable
         bool Packaged,
         int Dpi)
     {
-        public string Describe() => (Version ?? "winui-only")
+        public string Describe(bool includePackageIdentity = true) => (Version ?? "winui-only")
             + (WinUiKey.Length == 0 ? string.Empty : " + winui " + WinUiKey)
             + (PayloadKey.Length == 0 ? string.Empty : " + payload " + PayloadKey)
             + (ProcessLaunchKey.Length == 0 ? string.Empty : " + process launch hook")
-            + (Packaged ? " (packaged)" : string.Empty);
+            + (includePackageIdentity && Packaged ? " (packaged)" : string.Empty);
     }
 
     /// <summary>Runs the repro. Returns a process exit code.</summary>
     public async Task<int> RunAsync(CancellationToken ct)
     {
-        _ct = ct;
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        _ct = cancellation.Token;
 
         if (!File.Exists(_filePath))
         {
-            Log.Error("No such file: " + _filePath);
+            Log.Error(_options.File is null
+                ? "Bundled default sample is missing: " + _filePath
+                    + ". Rebuild with dotnet build or re-extract the bundle, or pass a .cs file."
+                : "No such file: " + _filePath);
+            return 1;
+        }
+
+        if (string.Equals(_filePath, _screenshotPath, StringComparison.OrdinalIgnoreCase))
+        {
+            Log.Error("The screenshot path must not overwrite the repro file.");
             return 1;
         }
 
@@ -109,8 +137,34 @@ internal sealed class ReproSession : IDisposable
         }
 
         Log.Field("file", _filePath);
+        if (_options.File is null)
+        {
+            Log.Detail("No file specified; using the bundled hello sample.");
+        }
+
         Log.Field("cache", _layout.CacheRoot);
         Log.Field("runner", _layout.BaseRunnerDir, _layout.IsPortable ? "(portable)" : "(dev)");
+        if (_screenshotPath is not null && !_options.ProvisionOnly)
+        {
+            Log.Field("screenshot", _screenshotPath);
+            Log.Field("runner log", RunnerLogPath);
+            try
+            {
+                string directory = Path.GetDirectoryName(_screenshotPath)
+                    ?? throw new ArgumentException("The screenshot path needs a parent directory.");
+                Directory.CreateDirectory(directory);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                Log.Error("Could not prepare the screenshot folder: " + ex.Message);
+                return 1;
+            }
+
+            if (_options.Headless)
+            {
+                Log.Detail("Headless: the Runner window stays cloaked. Capture fallbacks are reported.");
+            }
+        }
 
         if (_options.ClearCache)
         {
@@ -127,22 +181,105 @@ internal sealed class ReproSession : IDisposable
 
         if (!_options.Watch)
         {
+            if (!_options.ProvisionOnly && _screenshotPath is not null)
+            {
+                bool captured = await WaitForCaptureAsync().ConfigureAwait(false);
+                if (_options.Headless)
+                {
+                    _host.Stop();
+                    Log.Detail("Headless runner stopped.");
+                }
+                return captured ? 0 : 1;
+            }
+
             Log.Blank();
             Log.Ok(_options.ProvisionOnly
                 ? "Runner ready. Nothing launched."
                 : "Runner left running. Re-run to pick up edits.");
+            PrintEditPath();
             return 0;
         }
 
         Log.Step("watching");
-        Log.Detail("Save the file to push changes. Ctrl+C to stop.");
+        _canReadKeys = !Console.IsInputRedirected;
         StartWatching();
+        PrintWatchGuidance();
 
-        await WatchUntilCancelledAsync(ct).ConfigureAwait(false);
+        await WatchUntilCancelledAsync(cancellation).ConfigureAwait(false);
 
         Log.Blank();
         Log.Ok("Stopped.");
         return 0;
+    }
+
+    private async Task<bool> WaitForCaptureAsync()
+    {
+        long deadline = Environment.TickCount64 + (long)CaptureTimeout.TotalMilliseconds;
+        while (Environment.TickCount64 < deadline)
+        {
+            _ct.ThrowIfCancellationRequested();
+            if (ReadCurrentCapture() is { } result)
+            {
+                return ReportCapture(result);
+            }
+
+            if (_host.ProcessId is null)
+            {
+                Log.Error("The runner exited before completing the screenshot.");
+                ReportRunnerLog();
+                return false;
+            }
+
+            await Task.Delay(100, _ct).ConfigureAwait(false);
+        }
+
+        Log.Error("The runner did not complete rendering and capture within 60 seconds.");
+        Log.Detail("Expected result: " + _host.ResultPath);
+        ReportRunnerLog();
+        return false;
+    }
+
+    private RunnerResult? ReadCurrentCapture()
+    {
+        RunnerResult? result = _host.ReadResult();
+        return result?.RequestId == _requestId ? result : null;
+    }
+
+    private bool ReportCapture(RunnerResult result)
+    {
+        _reportedCapture = result.RequestId;
+        bool success = result.RenderSucceeded;
+        if (!success)
+        {
+            Log.Error("Render failed: " + (result.RenderError ?? "The runner supplied no error detail."));
+        }
+
+        if (result.CaptureWarning is { Length: > 0 } warning)
+        {
+            Log.Warn("Screenshot fallback: " + warning);
+        }
+
+        if (result.CaptureError is { Length: > 0 } error)
+        {
+            Log.Error("Screenshot failed: " + error);
+            return false;
+        }
+
+        if (!string.Equals(result.ScreenshotPath, _screenshotPath, StringComparison.OrdinalIgnoreCase)
+            || !File.Exists(_screenshotPath)
+            || result.CaptureMethod is not ("Windows.Graphics.Capture" or "RenderTargetBitmap"))
+        {
+            Log.Error("The runner did not produce the requested screenshot with a recognized capture method.");
+            return false;
+        }
+
+        Log.Ok("screenshot: " + _screenshotPath + " (" + result.CaptureMethod + ")");
+        if (result.CaptureMethod == "RenderTargetBitmap")
+        {
+            Log.Detail("XAML snapshot only: native frames, popup windows and other non-XAML content may be missing.");
+        }
+
+        return success;
     }
 
     public void Dispose()
@@ -152,8 +289,8 @@ internal sealed class ReproSession : IDisposable
         _debounce?.Dispose();
         _gate.Dispose();
 
-        // In no-watch mode the runner is meant to outlive us, so leave it alone.
-        if (_options.Watch)
+        // Only a visible no-watch runner is meant to outlive us.
+        if (_options.Watch || _options.Headless)
         {
             _host.Dispose();
         }
@@ -204,10 +341,11 @@ internal sealed class ReproSession : IDisposable
         }
 
         Snippet snippet = BuildSnippet(parsed, plan);
-        _host.WriteRequest(snippet);
+        _requestId = _host.WriteRequest(snippet);
 
         if (_running == plan)
         {
+            _captureDeadline = Environment.TickCount64 + (long)CaptureTimeout.TotalMilliseconds;
             Log.Event("pushed" + (parsed.Title is { Length: > 0 } t ? "  " + t : string.Empty));
             return true;
         }
@@ -295,7 +433,9 @@ internal sealed class ReproSession : IDisposable
                 exe,
                 bounds: null,
                 plan.Packaged,
-                runProcessLaunch: plan.ProcessLaunchKey.Length > 0)
+                runProcessLaunch: plan.ProcessLaunchKey.Length > 0,
+                headless: _options.Headless,
+                screenshotPath: _screenshotPath)
             .ConfigureAwait(false);
         if (!result.Launched)
         {
@@ -307,13 +447,14 @@ internal sealed class ReproSession : IDisposable
 
         // A packaged launch can silently fall back to unpackaged, which changes what is
         // actually under test. Say so loudly rather than letting it pass as success.
-        if (plan.Packaged && !result.ModeNote.Contains("packaged)", StringComparison.Ordinal))
+        if (plan.Packaged && !result.IsPackaged)
         {
             Log.Warn("Requested packaged, but" + result.ModeNote);
             Log.Detail("Run --doctor to check Developer Mode.");
         }
 
         _running = plan;
+        _captureDeadline = Environment.TickCount64 + (long)CaptureTimeout.TotalMilliseconds;
 
         string mode = result.ModeNote.Trim();
         if (firstRun)
@@ -322,7 +463,8 @@ internal sealed class ReproSession : IDisposable
         }
         else
         {
-            Log.Event("running " + plan.Describe());
+            Log.Event("running " + plan.Describe(includePackageIdentity: false)
+                + (mode.Length == 0 ? string.Empty : " " + mode));
         }
 
         return true;
@@ -396,19 +538,30 @@ internal sealed class ReproSession : IDisposable
         return resolved;
     }
 
+    private Task<IReadOnlyList<string>> GetVersionsAsync()
+    {
+        lock (_versionsLock)
+        {
+            if (_versionsTask is null || _versionsTask.IsFaulted || _versionsTask.IsCanceled)
+            {
+                _versionsTask = _provisioner.ListWasdkVersionsAsync(_options.Prerelease, _ct);
+            }
+
+            return _versionsTask;
+        }
+    }
+
     private async Task<IReadOnlyList<string>?> TryListVersionsAsync()
     {
-        if (_versions is not null)
-        {
-            return _versions;
-        }
-
         try
         {
-            _versions = await _provisioner.ListWasdkVersionsAsync(_options.Prerelease, _ct).ConfigureAwait(false);
-            return _versions;
+            return await GetVersionsAsync().ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException)
+        catch (OperationCanceledException) when (_ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (WasdkVersionList.IsExpectedFailure(ex))
         {
             return null;
         }
@@ -562,7 +715,115 @@ internal sealed class ReproSession : IDisposable
         }
         finally
         {
-            _gate.Release();
+            try
+            {
+                if (!_ct.IsCancellationRequested)
+                {
+                    PrintWatchGuidance();
+                }
+            }
+            finally
+            {
+                _gate.Release();
+            }
+        }
+    }
+
+    private void PrintEditPath() => Log.Raw("  Edit and save: " + _filePath);
+
+    private void PrintWatchGuidance()
+    {
+        Log.Blank();
+        Log.Detail(_canReadKeys
+            ? "Press V for WASDK versions. Ctrl+C to stop."
+            : "Use --list to see available WASDK versions. Ctrl+C to stop.");
+        PrintEditPath();
+    }
+
+    private bool ReadVersionShortcut()
+    {
+        if (!_canReadKeys)
+        {
+            return false;
+        }
+
+        try
+        {
+            bool requested = false;
+            while (Console.KeyAvailable)
+            {
+                ConsoleKeyInfo key = Console.ReadKey(intercept: true);
+                requested |= key.Key == ConsoleKey.V
+                    && (key.Modifiers & (ConsoleModifiers.Control | ConsoleModifiers.Alt)) == 0;
+            }
+
+            return requested;
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException)
+        {
+            _canReadKeys = false;
+            Log.Warn("Console keyboard input is unavailable: " + ex.Message);
+            PrintWatchGuidance();
+            return false;
+        }
+    }
+
+    private async Task ShowVersionsAsync(CancellationToken ct)
+    {
+        IReadOnlyList<string>? versions = null;
+        string? error = null;
+        try
+        {
+            Log.Detail("Looking up WASDK versions...");
+            versions = await GetVersionsAsync().ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception ex) when (WasdkVersionList.IsExpectedFailure(ex))
+        {
+            error = ex.Message;
+        }
+
+        try
+        {
+            // Only printing takes the gate; a slow feed must not block live edits or health checks.
+            await _gate.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                if (versions is not null)
+                {
+                    try
+                    {
+                        WasdkVersionList.Print(versions, _layout.CacheRoot, _options.Prerelease, _running?.Version);
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        error = ex.Message;
+                    }
+                }
+
+                if (error is not null)
+                {
+                    Log.Error("Could not list WASDK versions: " + error);
+                }
+
+                if (_options.Wasdk is { Length: > 0 })
+                {
+                    Log.Detail("--wasdk overrides the file header; omit it to switch versions by editing.");
+                }
+
+                PrintWatchGuidance();
+            }
+            finally
+            {
+                _gate.Release();
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Ctrl+C cancels the lookup and any wait to print.
         }
     }
 
@@ -570,39 +831,86 @@ internal sealed class ReproSession : IDisposable
     /// Blocks until Ctrl+C, noticing along the way if the runner exits on its own. That is
     /// the interesting case for this tool: a crash on startup is often the bug being chased.
     /// </summary>
-    private async Task WatchUntilCancelledAsync(CancellationToken ct)
+    private async Task WatchUntilCancelledAsync(CancellationTokenSource cancellation)
     {
-        while (!ct.IsCancellationRequested)
+        CancellationToken ct = cancellation.Token;
+        Task? versionDisplay = null;
+        long lastHealthCheck = Environment.TickCount64;
+        try
         {
-            try
+            while (!ct.IsCancellationRequested)
             {
-                await Task.Delay(HealthInterval, ct).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                return;
-            }
+                await Task.Delay(_canReadKeys ? KeyboardPollInterval : HealthInterval, ct).ConfigureAwait(false);
 
-            // Skip the check while a reload is in flight, otherwise the deliberate kill
-            // in the middle of a relaunch looks like a crash.
-            if (!_gate.Wait(0))
-            {
-                continue;
-            }
-
-            try
-            {
-                if (_running is not null && _host.ProcessId is null)
+                if (versionDisplay is { IsCompleted: true })
                 {
-                    Log.Event("the runner exited on its own");
-                    ReportRunnerLog();
-                    Log.Detail("Save the file to launch it again.");
-                    _running = null;
+                    Task completed = versionDisplay;
+                    versionDisplay = null;
+                    await completed.ConfigureAwait(false);
+                }
+
+                bool requested = ReadVersionShortcut();
+                if (requested && versionDisplay is null && !ct.IsCancellationRequested)
+                {
+                    versionDisplay = ShowVersionsAsync(ct);
+                }
+
+                long now = Environment.TickCount64;
+                if (now - lastHealthCheck < HealthInterval.TotalMilliseconds)
+                {
+                    continue;
+                }
+                lastHealthCheck = now;
+
+                // Skip deliberate relaunches; their process exits are not crashes.
+                if (!_gate.Wait(0))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    if (_screenshotPath is not null && _requestId != _reportedCapture)
+                    {
+                        if (ReadCurrentCapture() is { } result)
+                        {
+                            ReportCapture(result);
+                        }
+                        else if (_running is not null && _host.ProcessId is not null
+                            && now >= _captureDeadline && _timedOutCapture != _requestId)
+                        {
+                            _timedOutCapture = _requestId;
+                            Log.Error("The runner did not complete rendering and capture within 60 seconds.");
+                            Log.Detail("Expected result: " + _host.ResultPath);
+                            Log.Detail("Still watching; save the repro to retry.");
+                        }
+                    }
+
+                    if (_running is not null && _host.ProcessId is null)
+                    {
+                        Log.Event("the runner exited on its own");
+                        ReportRunnerLog();
+                        Log.Detail("Save the file to launch it again.");
+                        _running = null;
+                        PrintWatchGuidance();
+                    }
+                }
+                finally
+                {
+                    _gate.Release();
                 }
             }
-            finally
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Normal Ctrl+C shutdown.
+        }
+        finally
+        {
+            await cancellation.CancelAsync().ConfigureAwait(false);
+            if (versionDisplay is not null)
             {
-                _gate.Release();
+                await versionDisplay.ConfigureAwait(false);
             }
         }
     }

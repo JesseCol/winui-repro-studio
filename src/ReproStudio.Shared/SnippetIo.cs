@@ -17,9 +17,12 @@ public static class SnippetIo
     };
 
     public static void WriteAtomic(string path, Snippet snippet)
+        => WriteAtomicCore(path, snippet);
+
+    internal static void WriteAtomicCore<T>(string path, T value) where T : class
     {
         ArgumentNullException.ThrowIfNull(path);
-        ArgumentNullException.ThrowIfNull(snippet);
+        ArgumentNullException.ThrowIfNull(value);
 
         string? dir = Path.GetDirectoryName(path);
         if (!string.IsNullOrEmpty(dir))
@@ -28,21 +31,33 @@ public static class SnippetIo
         }
 
         string temp = path + ".tmp-" + Guid.NewGuid().ToString("N");
-        string json = JsonSerializer.Serialize(snippet, Options);
-        File.WriteAllText(temp, json);
-        File.Move(temp, path, overwrite: true);
+        string json = JsonSerializer.Serialize(value, Options);
+        try
+        {
+            File.WriteAllText(temp, json);
+            File.Move(temp, path, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temp))
+            {
+                File.Delete(temp);
+            }
+        }
     }
 
     /// <summary>
     /// Tries to read a snippet. Returns null if the file is missing, locked,
     /// mid-write, or malformed - the caller is expected to retry.
     /// </summary>
-    public static Snippet? TryRead(string path)
+    public static Snippet? TryRead(string path) => TryReadCore<Snippet>(path);
+
+    internal static T? TryReadCore<T>(string path) where T : class
     {
         try
         {
             string json = File.ReadAllText(path);
-            return JsonSerializer.Deserialize<Snippet>(json, Options);
+            return JsonSerializer.Deserialize<T>(json, Options);
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
         {

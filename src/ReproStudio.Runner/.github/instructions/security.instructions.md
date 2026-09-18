@@ -16,12 +16,7 @@ These rules apply to **every feature and change**. They are not optional add-ons
 - Use `SecureString` or `PasswordVault` for sensitive data in memory when practical.
 - Follow the **principle of least privilege** — request only the permissions the app actually needs in `Package.appxmanifest`.
 - Keep NuGet packages up to date — run `dotnet list package --outdated` regularly.
-- Enable **code signing** for published MSIX packages. Use the `winapp` CLI rather than hand-rolling `signtool`:
-  - Generate a development certificate matching the manifest publisher: `winapp cert generate --manifest .\Package.appxmanifest --install`.
-  - Inspect a cert before signing: `winapp cert info .\devcert.pfx`.
-  - Sign an existing file: `winapp sign .\MyApp.msix --cert .\devcert.pfx`.
-  - Build + sign in one step: `winapp pack .\bin\<Platform>\Release\<TFM>\win-<rid> --cert .\devcert.pfx`.
-  - Production releases must be signed by a trusted certificate authority -- never ship the development cert.
+- Packaged mode gives the full-trust runner package identity, not a sandbox. Repro C# still runs with the user's permissions; keep that warning clear.
 - When using `HttpClient`, always validate TLS certificates and use HTTPS.
 - Never log sensitive data (PII, tokens, passwords).
 
@@ -34,7 +29,7 @@ These rules apply to **every feature and change**. They are not optional add-ons
 
 ## Validation
 
-- Build & register the MSIX package — see **Build, Run & Deploy** in `.github/agents/Agents.md`.
+- Follow the [Runner launch-mode instructions](../../AGENTS.md#launch-modes). This uses loose-layout registration, not an MSIX installer or certificate setup.
 - Check for hard-coded secrets: search for `password`, `apikey`, `secret`, `connectionstring` in `.cs` files.
 
 ### Verification Checklist
@@ -49,7 +44,6 @@ These rules apply to **every feature and change**. They are not optional add-ons
 |---|---|---|
 | 1 | [.NET Security Best Practices](https://learn.microsoft.com/en-us/dotnet/standard/security/) | Any code handling credentials, tokens, or sensitive data |
 | 2 | [Secure coding guidelines for .NET](https://learn.microsoft.com/en-us/dotnet/standard/security/secure-coding-guidelines) | Input validation, exception handling, type safety |
-| 3 | [MSIX Security](https://learn.microsoft.com/en-us/windows/msix/msix-container) | Packaging, signing, or distribution changes |
+| 3 | [MSIX Security](https://learn.microsoft.com/en-us/windows/msix/msix-container) | Understanding package identity and full-trust behavior |
 | 4 | [Package.appxmanifest capabilities](https://learn.microsoft.com/en-us/windows/uwp/packaging/app-capability-declarations) | Adding or modifying app capabilities/permissions |
-
 

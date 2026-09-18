@@ -367,7 +367,7 @@ internal static class Doctor
 
         if (findings.Problems.Count == 0 && findings.Warnings.Count == 0)
         {
-            Log.Ok("Ready to run. Try: ReproStudio.exe samples\\hello.cs");
+            Log.Ok("Ready to run. Try: ReproStudio.exe");
             return 0;
         }
 

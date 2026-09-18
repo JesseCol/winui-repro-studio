@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Runtime.Loader;
 using System.Text;
 using Microsoft.CodeAnalysis;
@@ -66,19 +67,59 @@ public sealed class RoslynCompiler
     {
         ArgumentNullException.ThrowIfNull(csharp);
 
-        SyntaxTree tree = CSharpSyntaxTree.ParseText(Usings + csharp);
+        var parseOptions = CSharpParseOptions.Default;
+        SyntaxTree tree = CSharpSyntaxTree.ParseText(Usings + csharp, parseOptions);
 
         var compilation = CSharpCompilation.Create(
             "ReproSnippet_" + Guid.NewGuid().ToString("N"),
             new[] { tree },
             BuildReferences(),
-            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            new CSharpCompilationOptions(
+                OutputKind.DynamicallyLinkedLibrary,
+                allowUnsafe: true,
+                platform: RuntimeInformation.ProcessArchitecture switch
+                {
+                    Architecture.X86 => Platform.X86,
+                    Architecture.X64 => Platform.X64,
+                    Architecture.Arm64 => Platform.Arm64,
+                    _ => throw new PlatformNotSupportedException("Unsupported Runner architecture."),
+                }));
+
+        Compilation output = compilation;
+        try
+        {
+            IReadOnlyList<string> requests = Win32Generator.ReadRequests(csharp);
+            if (requests.Count > 0)
+            {
+                output = Win32Generator.Generate(compilation, parseOptions, requests, out var diagnostics);
+                // CsWin32 reports unknown APIs (and Roslyn reports generator crashes)
+                // as warnings. Never emit a success-shaped, incomplete binding set.
+                var failures = diagnostics.Where(d =>
+                    d.Severity is DiagnosticSeverity.Warning or DiagnosticSeverity.Error).ToList();
+                if (failures.Count > 0)
+                {
+                    return new CompileResult
+                    {
+                        Success = false,
+                        Error = "CsWin32 generation failed:\n" + FormatDiagnostics(failures, tree),
+                    };
+                }
+            }
+        }
+        catch (Exception ex) when (ex is FormatException or IOException)
+        {
+            return new CompileResult { Success = false, Error = "CsWin32 generation failed:\n" + ex };
+        }
 
         using var ms = new MemoryStream();
-        EmitResult emit = compilation.Emit(ms);
+        EmitResult emit = output.Emit(ms);
         if (!emit.Success)
         {
-            return new CompileResult { Success = false, Error = FormatErrors(emit) };
+            return new CompileResult
+            {
+                Success = false,
+                Error = FormatDiagnostics(emit.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error), tree),
+            };
         }
 
         ms.Seek(0, SeekOrigin.Begin);
@@ -191,15 +232,22 @@ public sealed class RoslynCompiler
         return pathsByName;
     }
 
-    private static string FormatErrors(EmitResult emit)
+    private static string FormatDiagnostics(IEnumerable<Diagnostic> diagnostics, SyntaxTree snippetTree)
     {
         var sb = new StringBuilder();
-        foreach (Diagnostic diagnostic in emit.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error))
+        foreach (Diagnostic diagnostic in diagnostics)
         {
-            FileLinePositionSpan span = diagnostic.Location.GetLineSpan();
-            int line = Math.Max(1, span.StartLinePosition.Line + 1 - UsingsLineCount);
-            int column = span.StartLinePosition.Character + 1;
-            sb.AppendLine($"({line},{column}): {diagnostic.Id}: {diagnostic.GetMessage()}");
+            if (diagnostic.Location != Location.None)
+            {
+                FileLinePositionSpan span = diagnostic.Location.GetLineSpan();
+                bool isSnippet = diagnostic.Location.SourceTree == snippetTree;
+                int line = Math.Max(1, span.StartLinePosition.Line + 1 - (isSnippet ? UsingsLineCount : 0));
+                int column = span.StartLinePosition.Character + 1;
+                // Generated files and NativeMethods.txt have their own coordinates.
+                sb.Append($"{(isSnippet ? string.Empty : span.Path)}({line},{column}): ");
+            }
+
+            sb.AppendLine($"{diagnostic.Severity} {diagnostic.Id}: {diagnostic.GetMessage()}");
         }
 
         return sb.ToString().Trim();

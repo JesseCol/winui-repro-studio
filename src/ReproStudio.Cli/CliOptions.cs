@@ -7,7 +7,7 @@ namespace ReproStudio_Cli;
 /// </summary>
 public sealed class CliOptions
 {
-    /// <summary>The repro <c>.cs</c> file to run. Null for <c>--list</c>, <c>--doctor</c> and help.</summary>
+    /// <summary>The repro file, or null to use the bundled sample when launching.</summary>
     public string? File { get; private set; }
 
     /// <summary>Windows App SDK version, overriding the file's <c>// wasdk:</c> header.</summary>
@@ -31,6 +31,12 @@ public sealed class CliOptions
     /// <summary>Watch the file and re-push on save. On by default.</summary>
     public bool Watch { get; private set; } = true;
 
+    /// <summary>Cloak the Runner window and save a screenshot after each render.</summary>
+    public bool Headless { get; private set; }
+
+    /// <summary>PNG output path, relative to the invoking working directory.</summary>
+    public string? Screenshot { get; private set; }
+
     /// <summary>Prepare the runner but do not launch it, then exit.</summary>
     public bool ProvisionOnly { get; private set; }
 
@@ -51,13 +57,15 @@ public sealed class CliOptions
         ReproStudio - run a single-file WinUI repro against any Windows App SDK version.
 
         usage:
-          ReproStudio <file.cs> [options]
+          ReproStudio [file.cs] [options]
           ReproStudio --list [--prerelease]
           ReproStudio --doctor
 
+        Omit file.cs to run the bundled samples\hello.cs, regardless of the current folder.
+
         options:
-          --wasdk <version>   Windows App SDK version. Partial is fine ("1.6" picks the
-                              newest 1.6). Overrides the file's "// wasdk:" header.
+          --wasdk <version>   Windows App SDK version. Partial is fine ("2.2" picks the
+                              newest 2.2). Overrides the file's "// wasdk:" header.
           --winui <ver|path>  Override just the WinUI component: a version, or the path to
                               a local .nupkg. Overrides "// winui:".
           --payload <dir>     Copy every file in <dir> over the runner, after the Windows
@@ -68,7 +76,13 @@ public sealed class CliOptions
           --packaged          Run the runner with package identity. Needs Developer Mode.
           --unpackaged        Force no package identity, even if the file asks for it.
           --prerelease        Include prerelease versions when resolving and listing.
+          --headless          Cloak the runner window. Save ReproStudio.png in the current
+                              folder after each render; --screenshot overrides the path.
+          --screenshot <png>  Save a PNG after each render, also in visible mode.
+                              Uses Windows.Graphics.Capture, with a reported XAML fallback.
           --no-watch          Launch and exit, instead of watching the file for saves.
+                              With --headless, wait for the screenshot and stop the runner.
+                              With --screenshot alone, wait for the image and leave it open.
           --provision-only    Prepare the runner for the version asked for, then exit
                               without launching. Warms the cache; also useful for
                               building a bundle that runs with no network.
@@ -76,6 +90,12 @@ public sealed class CliOptions
           --list              List available Windows App SDK versions and exit.
           --doctor            Print environment diagnostics and exit.
           -h, --help          Show this help.
+
+        while watching:
+          V                  List WASDK versions without stopping the preview.
+          Ctrl+C             Stop the runner and exit.
+          The full path to edit is repeated below the console instructions.
+          With redirected input, use --list instead of the V shortcut.
 
         environment:
           REPROSTUDIO_CACHE   Where downloads and provisioned runners go. Defaults to
@@ -86,7 +106,7 @@ public sealed class CliOptions
           how it runs. Everything is optional.
 
             // repro:      a friendly name
-            // wasdk:      1.6                 Windows App SDK version
+            // wasdk:      2.2                 Windows App SDK version
             // winui:      3.0.0-x  |  C:\p.nupkg  |  default
             // packaged:   yes | no            run with package identity
             // theme:      light | dark | default
@@ -104,8 +124,12 @@ public sealed class CliOptions
             }
 
         examples:
+          ReproStudio
+          ReproStudio --wasdk 2.2
           ReproStudio bug.cs
-          ReproStudio bug.cs --wasdk 1.7 --packaged
+          ReproStudio bug.cs --wasdk 2.2 --packaged
+          ReproStudio bug.cs --headless --no-watch
+          ReproStudio bug.cs --headless --screenshot captures\bug.png
           ReproStudio bug.cs --winui C:\builds\Microsoft.WindowsAppSDK.WinUI.3.0.0.nupkg
         """;
 
@@ -144,6 +168,24 @@ public sealed class CliOptions
                     break;
                 case "--no-watch":
                     options.Watch = false;
+                    break;
+                case "--headless":
+                    options.Headless = true;
+                    break;
+                case "--screenshot":
+                    if (!TryTakeValue(args, ref i, out string? screenshot, out error))
+                    {
+                        return false;
+                    }
+
+                    if (string.IsNullOrWhiteSpace(screenshot) || screenshot.StartsWith('-')
+                        || !Path.GetExtension(screenshot).Equals(".png", StringComparison.OrdinalIgnoreCase))
+                    {
+                        error = "--screenshot needs a PNG file path, such as captures\\repro.png.";
+                        return false;
+                    }
+
+                    options.Screenshot = screenshot;
                     break;
                 case "--provision-only":
                     options.ProvisionOnly = true;
@@ -195,13 +237,6 @@ public sealed class CliOptions
                     options.File = arg;
                     break;
             }
-        }
-
-        if (options.File is null && !options.Help && !options.List && !options.Doctor)
-        {
-            error = args.Length == 0 ? null : "No repro file given.";
-            options.Help = true;
-            return error is null;
         }
 
         return true;

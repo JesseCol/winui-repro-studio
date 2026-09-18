@@ -28,7 +28,7 @@
     BuildOutput\bin\<flavour>\Product, or BuildOutput\packaging\<config>\runtimes\<rid>\native.
 
 .PARAMETER OutputPath
-    Where to write the .nupkg. Defaults to artifacts\local-winui\ next to this repo.
+    Where to write the .nupkg. Defaults to out\local-winui\ next to this repo.
 
 .PARAMETER Version
     Version string for the file name. Defaults to the source Microsoft.ui.xaml.dll's
@@ -43,7 +43,7 @@
 
 .EXAMPLE
     # Then run a repro against it:
-    ReproStudio.exe bug.cs --wasdk 2.3.1 --winui artifacts\local-winui\<name>.nupkg
+    ReproStudio.exe bug.cs --wasdk 2.3.1 --winui out\local-winui\<name>.nupkg
 #>
 [CmdletBinding()]
 param(
@@ -82,7 +82,7 @@ if (-not (Test-Path -LiteralPath $Source -PathType Container)) {
 $Source = (Resolve-Path -LiteralPath $Source).Path
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-if (-not $OutputPath) { $OutputPath = Join-Path $repoRoot 'artifacts\local-winui' }
+if (-not $OutputPath) { $OutputPath = Join-Path $repoRoot 'out\local-winui' }
 
 $core = Join-Path $Source 'Microsoft.ui.xaml.dll'
 if (-not (Test-Path -LiteralPath $core)) {

@@ -1,5 +1,5 @@
 // repro:      Every header key
-// wasdk:      1.7
+// wasdk:      2.2
 // winui:      default
 // payload:    none
 // packaged:   no
@@ -14,9 +14,10 @@
 // optional, and order doesn't matter.
 //
 //   repro       Friendly name. Shows up in the runner's title bar.
-//   wasdk       WASDK version. Partial is fine: "1.7" picks the newest 1.7.x.
-//               Write a full version (three dots) to pin it and skip the
-//               network lookup entirely.
+//   wasdk       WASDK version. Partial is fine: "2.2" picks the newest 2.2.x.
+//               Press V in the console, or use ReproStudio --list, to see versions.
+//               Write an exact version (for example 2.2.0) to pin it and skip
+//               the version-list lookup.
 //   winui       Override just the WinUI component. A version, a path to a local
 //               .nupkg (relative paths resolve next to this file), or "default".
 //   payload     Folder of loose files to copy over the runner, after the WASDK
