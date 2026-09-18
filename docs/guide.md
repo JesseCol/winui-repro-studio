@@ -5,6 +5,97 @@ builds, and writing repro files.
 
 Back to the [README](../README.md).
 
+## Run it. Change it. Keep the pixels.
+
+One file, two windows. The command window picks the runtime and watches your
+file. The WinUI Runner draws it. Here's the whole loop.
+
+### 1. Run a copy
+
+From the built or unzipped folder containing `ReproStudio.exe`:
+
+```powershell
+Copy-Item samples\cswin32.cs workflow-demo.cs
+.\ReproStudio.exe workflow-demo.cs --payload none
+```
+
+[![Top: the real host console runs workflow-demo.cs on WASDK 2.2.0 and watches for edits. Bottom: its WinUI Runner shows the CsWin32 sample, window measurements, log, and loaded WinUI version.](images/workflow-overview.png)](images/workflow-overview.png)
+
+*Two separate, real captures stacked for reading, not a desktop screenshot.
+Full-size originals: [command window](images/workflow-host.png) /
+[Runner](images/workflow-runner.png).*
+
+Read from top to bottom: **wasdk** is the selected package version; **running**
+names the Runner PID; **Edit and save** points to your file. The Runner's footer
+shows the native WinUI version actually loaded, which is a different version number.
+
+Try moving or resizing the Runner, then click **Refresh**. This sample uses
+generated Win32 bindings for `GetWindowRect` and `GetDpiForWindow`. Its new
+measurements appear in both the repro and the log.
+
+### 2. Save an edit, not a new process
+
+In `workflow-demo.cs`, change the heading `Generated Win32 bindings` to
+`Saved. Same window.` and add `// theme: Light` near the top. Save the file.
+No second launch command. No rebuild.
+
+<details>
+<summary>See the live change: new heading, Light stage, same window handle</summary>
+
+[![The same Runner after saving, with the heading Saved. Same window. and a Light repro stage. HWND 0x10C01BC is unchanged; the log and native version footer remain visible.](images/workflow-reload-runner.png)](images/workflow-reload-runner.png)
+
+*The heading and stage theme changed. The HWND stayed `0x10C01BC`, and the
+Runner PID stayed `10204`. Only the repro stage switches to Light; the
+Runner's log keeps its own theme.*
+
+The [host's reload capture](images/workflow-reload-host.png) shows **pushed**,
+not another launch.
+
+</details>
+
+Ordinary XAML and C# edits update in place. A launch-time change, such as
+another `// wasdk:` version, instead prints **relaunching** and starts the
+matching Runner.
+
+### 3. Save a PNG without the pop-up
+
+Press **Ctrl+C** to stop the live session, then run:
+
+```powershell
+.\ReproStudio.exe workflow-demo.cs --headless --no-watch --payload none `
+    --screenshot workflow.png
+```
+
+The Runner renders while its window stays cloaked and saves `workflow.png`
+in your current directory. The host reports the capture backend and stops
+the Runner. No visible preview to dismiss.
+
+<details>
+<summary>See the real command, completion, and saved PNG</summary>
+
+[![The actual headless command and output: workflow.png saved using Windows.Graphics.Capture, followed by Headless runner stopped.](images/workflow-headless-host.png)](images/workflow-headless-host.png)
+
+*This run used **Windows.Graphics.Capture** and exited successfully. The
+console names the output path and confirms that the hidden Runner stopped.*
+
+[![The unmodified PNG saved by the cloaked Runner: the edited Light-themed repro, native frame, log, and version footer. This is an image file, not a visible open window.](images/workflow-headless-result.png)](images/workflow-headless-result.png)
+
+*Above is the saved file, not an open window. This one-shot run used a new
+Runner at its default size, so its HWND and measurements differ from the live run.*
+
+</details>
+
+Check your own backend line: `Windows.Graphics.Capture` captures the window;
+a reported `RenderTargetBitmap` fallback captures only XAML. See
+[headless runs and screenshots](#headless-runs-and-screenshots) for the limits.
+
+Capture setup: a disposable copy of `samples\cswin32.cs`, a warmed stock cache,
+and compact live windows. For clean demo paths, these processes used
+`REPROSTUDIO_CACHE=out\guide-capture-astra\cache` and
+`TEMP`/`TMP` under `out\guide-capture-astra\temp` (absolute paths under this
+checkout). You don't need those settings. Your paths, PIDs, handles, and
+version numbers will differ.
+
 ## Take it to another machine
 
 ```powershell
