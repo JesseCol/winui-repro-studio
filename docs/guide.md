@@ -5,6 +5,19 @@ builds, and writing repro files.
 
 Back to the [README](../README.md).
 
+## Pick a task
+
+| I want to... | Go here |
+|---|---|
+| Run or change the tool from source | [Build and run](#build-and-run-from-source) |
+| See the edit/save loop | [Visual walkthrough](#run-it-change-it-keep-the-pixels) |
+| Choose APIs and native runtime separately | [SDK/API and runtime](#sdkapi-and-runtime) |
+| Pin, edit, or switch runtime from the preview | [Runner toolbar](#runner-toolbar) |
+| Test a private DLL | [Payload folder](#test-a-private-build-the-payload-folder) |
+| Save a screenshot | [Headless runs and screenshots](#headless-runs-and-screenshots) |
+| Diagnose a failed run | [Troubleshooting](#when-something-fails) |
+| Find the code behind a feature | [Code map](how-it-works.md#where-to-change-what) |
+
 ## Run it. Change it. Keep the pixels.
 
 One file, two windows. The command window picks the runtime and watches your
@@ -18,6 +31,9 @@ From the built or unzipped folder containing `ReproStudio.exe`:
 Copy-Item samples\cswin32.cs workflow-demo.cs
 .\ReproStudio.exe workflow-demo.cs --payload none
 ```
+
+From the repository root, the same loop is `dotnet run -- samples\cswin32.cs
+--payload none`. Use `--` to separate host arguments from `dotnet run` options.
 
 [![Top: the real host console runs workflow-demo.cs on WASDK 2.2.0 and watches for edits. Bottom: its WinUI Runner shows the CsWin32 sample, window measurements, log, and loaded WinUI version.](images/workflow-overview.png)](images/workflow-overview.png)
 
@@ -96,6 +112,59 @@ and compact live windows. For clean demo paths, these processes used
 checkout). You don't need those settings. Your paths, PIDs, handles, and
 version numbers will differ.
 
+## Runner toolbar
+
+The preview's toolbar is outside your repro's XAML:
+
+- **Pin** toggles Windows' actual always-on-top state. It is a user preference,
+  not repro content: saves and legacy `// topmost:` comments do not affect it.
+  The last saved choice is shared across Runner versions and launches in
+  `<cache-root>\runner-preferences.json`. The default cache root is
+  `%LOCALAPPDATA%\winui-repro-app`; `REPROSTUDIO_CACHE` can isolate it.
+  `--clear-cache` does not delete this preference. Headless Runners stay
+  non-topmost without changing the saved choice.
+- **Open in VS Code** opens the original `.cs` path printed by the host, including
+  the bundled hello sample when no file was specified. Stable Visual Studio Code
+  must be installed in its standard user/system location, registered under App
+  Paths, or have `Code.exe` on PATH. The tool launches that executable directly,
+  not `code.cmd` or your default editor. Missing files/installations show errors.
+- **Runtime: ...** opens a searchable dialog. Choose **Windows App SDK** *or*
+  **WinUI**, select one version, then **Apply and restart**. Stable versions are
+  shown by default; **Include prereleases** is optional. In WinUI mode, **Browse**
+  selects a local `.nupkg` instead of a published version. It uses the existing
+  content-keyed package cache; it does not watch or invalidate private packages.
+  A mixed initial CLI configuration is identified explicitly, but the dialog
+  can only apply one choice.
+
+The **SDK / C# API** choice is separate from that native-runtime choice. Leave it
+matched for ordinary repros, choose a Windows App SDK API version for compatibility
+work, or choose **Bundled API (base)** to keep the base Runner's APIs.
+See [SDK/API and runtime](#sdkapi-and-runtime).
+
+Cancel, searching, filtering, and changing the radio choice do not save or restart.
+On Apply, the watching host uses the repro's `nuget.config` and prepares the
+pair before changing the source or stopping the old preview. It removes every
+leading `wasdk` and `winui` header and inserts exactly the selected one in the
+**original repro**, and writes the `sdk` choice (or removes it for `match`).
+Other comments/code, BOM and newline style stay intact.
+UTF-8 and BOM-marked UTF-16/UTF-32 are supported; undecodable files are rejected,
+not silently converted. If the source changed since that preview was sent,
+changes during preparation, or cannot be written, the operation fails with a
+retry message. Reopen Runtime after the saved file refreshes the preview.
+Source commit uses a brief exclusive file lock; an editor may need to retry a save
+that happens at exactly that instant.
+
+Accepting a choice deliberately retires startup `--sdk`, `--wasdk`, and `--winui`
+overrides for that host session, so the new headers win on later saves too.
+Advanced command-line dual overrides still work on a new launch. Other options,
+including payload and package identity, keep their existing semantics. The
+footer always reports the native WinUI DLL actually loaded, not a pending choice.
+
+Runtime changes need a live watching host and are disabled with `--no-watch`
+or after the host exits. Pin and Open in VS Code still work in a visible one-shot
+Runner. Toolbar errors have their own message area and log entries; they do not
+replace a repro's render error.
+
 ## Take it to another machine
 
 ```powershell
@@ -111,9 +180,9 @@ machine and run it. The zip includes the samples, this `docs` folder, and
 ```
 
 The target machine needs **nothing installed** - no SDK, no .NET runtime, no
-Windows App SDK runtime. It does need internet, because WASDK versions are pulled
-from NuGet on demand. The floor is **Windows 10 1809 (build 17763)**, which is the
-minimum for .NET 10 and for every WASDK version this tool provisions.
+Windows App SDK runtime. It does need internet on first use, because packages are pulled
+from NuGet on demand. The tool's floor is **Windows 10 1809 (build 17763)**.
+A selected SDK/runtime or the APIs in your repro can require a newer OS.
 
 If something doesn't work, ask it:
 
@@ -130,6 +199,10 @@ came from, what's in the cache, and whether Developer Mode is on.
 .\ReproStudio.exe [file.cs] [options]
 ```
 
+From a source checkout, use `dotnet run -- [file.cs] [options]` instead.
+For example, `dotnet run -- --help` shows the host's help; `dotnet run --help`
+shows the .NET SDK's help.
+
 Without a file, launch commands use `samples\hello.cs` relative to the executable,
 not the working directory. For example, `.\ReproStudio.exe --wasdk 2.2` opens the
 default sample on that version. `--help`, `--list`, and `--doctor` remain
@@ -137,6 +210,7 @@ standalone commands and do not launch a preview.
 
 | Option | What |
 |---|---|
+| `--sdk <version\|match\|base>` | Managed C# API/SDK selection. `match` (default) follows the runtime source; an explicit WASDK version selects its APIs; `base` keeps the bundled API surface. |
 | `--wasdk <version>` | WASDK version. Partial is fine (`2.2` picks the newest 2.2). Overrides the file header. |
 | `--winui <ver\|path>` | Override just the WinUI component: a version, or a local `.nupkg`. |
 | `--payload <dir>` | Copy every file in `<dir>` over the runner. The quick way to test a private build. `none` disables it. |
@@ -154,11 +228,15 @@ Set `REPROSTUDIO_CACHE` to move downloads and provisioned runners off
 `%LOCALAPPDATA%`.
 
 While it's watching, saving the file pushes the change. Editing a *launch-time*
-header key (`wasdk`, `winui`, `payload`, `packaged`, `dpi`) re-provisions and relaunches
+header key (`sdk`, `wasdk`, `winui`, `payload`, `packaged`, `dpi`) re-provisions and relaunches
 instead. If the runner dies on its own, the console says so and prints whatever
 the runner appended to its crash log.
 
 Ctrl+C stops the runner and unregisters the package.
+
+Package identity is shared per Windows user, so only one host can own packaged
+mode at a time, even with separate caches. A second host reports the conflict
+and falls back to unpackaged mode without replacing the first registration.
 
 Press **V** in the watching console to list WASDK versions without restarting
 the preview. Copy a listed version into the file's `// wasdk:` header and save.
@@ -173,13 +251,88 @@ With redirected console input, use `.\ReproStudio.exe --list` in another
 terminal instead. Add `--prerelease` to include previews. Neither shortcut changes
 the repro file for you, and an explicit `--wasdk` argument still overrides its header.
 
+## SDK/API and runtime
+
+There are two versions to choose:
+
+| Choice | Controls |
+|---|---|
+| **SDK/API** | The managed APIs C# can compile against and the projections the Runner loads. |
+| **Runtime** | The native WASDK/WinUI implementation that executes those calls. |
+
+Normally they match. For example, this selects the experimental APIs and their
+matching native runtime:
+
+```powershell
+dotnet run -- my-repro.cs --wasdk 2.4.1-experimental --payload none
+```
+
+For a compatibility repro, choose the API surface explicitly:
+
+```powershell
+dotnet run -- my-repro.cs --sdk 2.4.1-experimental --wasdk 2.2.0 --payload none
+```
+
+Or keep both choices in the file:
+
+```csharp
+// sdk:   2.4.1-experimental
+// wasdk: 2.2.0
+```
+
+That second combination can **compile** newer members such as `Window.Width`,
+but calling an API absent from the older native runtime can still fail at
+runtime. With an older SDK and newer runtime, the opposite applies: an API absent
+from the chosen managed surface remains a compile error.
+
+`--sdk match` (or no `sdk` header) matches the selected runtime source, including
+a WinUI package selection. `--sdk base` explicitly uses the managed APIs shipped
+in `runner-base`, preserving the original native-only-overlay behavior. It is an
+escape hatch, not an automatic fallback after a failed SDK selection.
+
+These are **Windows App SDK/API** versions, not versions of the .NET SDK or C#
+language. Provisioning uses package assets; the target machine does not need
+MSBuild or an installed .NET SDK. Each pair uses a separate Runner process and
+cache identity. Unsupported combinations fail visibly instead of substituting
+another API surface.
+
+The base Runner binary still has a build-time SDK. That is distinct from the
+managed SDK/API payload selected for a run and from the native runtime reported
+by the WinUI footer.
+
+## When something fails
+
+Start with the environment report:
+
+```powershell
+# Source checkout:
+dotnet run -- --doctor
+# Portable bundle:
+.\ReproStudio.exe --doctor
+```
+
+The host prints the repro path, chosen runtime, base Runner, and log path.
+Read those before guessing which copy is running.
+
+| Symptom | What to check |
+|---|---|
+| A host option shows .NET help or behaves strangely | Put host arguments after `--`: `dotnet run -- samples\hello.cs --wasdk 2.2`. |
+| No preview, or a compile/XAML error | Keep the sample's class wrapper and `const string Xaml` literal. Read the error panel and printed Runner log. |
+| The Runner is missing or seems stale | From source, use `dotnet run` without `--no-build`. For a bundle, re-extract the complete archive. |
+| NuGet cannot be reached | Prepare the exact SDK/runtime pair online first. An unchanged cached pair can run offline; creating a new pair may need dependency-version lookups even if some packages are cached. |
+| A private fix seems to affect a stock run | Check the printed payload path. Use `--payload none` for the stock baseline. |
+| A new API gives a compile error | Check the SDK/API choice, not just the native runtime. A runtime DLL cannot add members to an older managed projection. |
+| Packaged mode fell back | The warning names the actual mode. `--doctor` checks identity assets and Developer Mode; do not treat fallback as a packaged result. |
+
+Saving a corrected file retries the preview. There is no need to restart the
+host for an ordinary bad edit.
+
 ## Headless runs and screenshots
 
 From the repository root:
 
 ```powershell
-dotnet build
-.\out\Debug\x64\ReproStudio.exe samples\cswin32.cs --headless --no-watch --payload none
+dotnet run -- samples\cswin32.cs --headless --no-watch --payload none
 ```
 
 This cloaks the real Runner window, saves `ReproStudio.png` in the current
@@ -249,10 +402,16 @@ do not overwrite each other.
 - Images are taken after render requests, not continuously as animations,
   asynchronous work, or interactions change the app.
 
+**Known issue:** WGC can occasionally return the previous scene after a headless
+live reload, even with a successful, current request ID. Inspect the actual PNG
+before using it as evidence. The smoke script checks pixel changes across repeated
+saves; `-RequireWgc` also prevents a XAML-only fallback from passing that check.
+This capture issue remains a separate follow-up.
+
 ## Test a private build: the payload folder
 
-Provisioning a runner is really just "copy the base runner, then copy a WASDK
-version's native files over it". The payload folder adds one more copy on the end,
+Provisioning assembles the base Runner, selected managed SDK/API files, and
+selected native runtime. The payload folder adds one more copy on the end,
 so testing a private build of `Microsoft.ui.xaml.dll` is a matter of dropping the
 file somewhere and running:
 
@@ -260,7 +419,7 @@ file somewhere and running:
 .\ReproStudio.exe samples\hello.cs --payload D:\my-winui-build
 ```
 
-Whatever is in that folder wins over the stock file of the same name. Files keep
+Native files in that folder win over stock files of the same name. Files keep
 their relative paths, so a subfolder like `Microsoft.UI.Xaml\` (the themes
 directory) works the same as a loose DLL.
 
@@ -281,14 +440,14 @@ which is how you get a stock comparison without moving files around.
 
 A few things worth knowing:
 
-- Payload runners are provisioned into a separate `<version>+payload` folder, so
+- Payload contents are part of the SDK/runtime pair's cache key, so
   runs without a payload keep using untouched stock bits.
-- Changing the payload rebuilds that folder. An overlaid file can't be
-  un-overlaid in place, because nothing recorded what it used to be.
+- Changing the payload prepares a new pair rather than editing a running pair.
 - `.txt` and `.md` files are ignored, so the folder can carry a README without
   that counting as content.
-- Nothing is validated. Drop in a binary that doesn't load and the runner will
-  fail to start and say so.
+- Managed DLLs, Runner application files and `resources.pri` are rejected.
+  Choose managed APIs with `--sdk`, not a loose-file overlay. Native compatibility
+  is still your responsibility; a bad binary can fail to load.
 
 **Always take a stock reading before you trust a payload reading.** If the
 private build changes nothing, that's worth knowing; if it changes everything,
@@ -303,7 +462,7 @@ Both put private bits in front of the runner. They solve different problems.
 | Input | Loose files | A version, or a built `.nupkg` |
 | Best for | One rebuilt DLL, iterating fast | A full WinUI build you want to keep and share |
 | Setup | Copy a file in | Build a nupkg first |
-| Granularity | Any file, any subfolder | The WinUI component |
+| Granularity | Native files and resources, preserving subfolders | The WinUI component and its dependencies |
 | Knows what stack it needs | No | Yes, if the nupkg declares dependencies |
 
 For a tight edit-build-test loop, use `--payload`. To hand someone a bundle that
@@ -325,27 +484,16 @@ Point ReproStudio at it and it works out the rest:
 .\ReproStudio.exe bug.cs --winui D:\winui\...\Microsoft.WindowsAppSDK.WinUI.3.9.9-mybuild.nupkg
 ```
 
-```
-> provision
-  winui     Microsoft.WindowsAppSDK.WinUI.3.9.9-mybuild.nupkg
-  . No Windows App SDK version asked for, so this package's own dependencies pick the stack.
-  . Resolving components from the WinUI package...
-  . Fetching Microsoft.WindowsAppSDK.Base 2.0.4...
-  . Fetching Microsoft.WindowsAppSDK.Foundation 2.3.5...
-  . Fetching Microsoft.WindowsAppSDK.InteractiveExperiences 2.1.3...
-  . Applying local WinUI package ...
-```
-
-No `--wasdk` needed. The package is self-describing, so the versions it gets are
-the versions it was built against.
+No `--wasdk` is needed. The package's dependency ranges choose the rest of the
+stack. With the default `--sdk match`, its managed APIs and native files are
+prepared together. The host prints both selections and the managed WinUI version.
 
 ### Why this matters
 
-A WinUI build compiled against Foundation 3.0.0 will happily load on a WASDK
-2.3.1 runner, which ships Foundation 2.3.5. Nothing complains at provision time.
-The mismatch surfaces much later as an unexplained `E_NOINTERFACE` or an
-`InvalidCastException`, and you lose a day to it. Letting the package pick its own
-stack removes the guess.
+A newer WinUI build can require a Foundation interface missing from an older
+stack. A loose native overlay can then fail with `E_NOINTERFACE` or an
+`InvalidCastException`. Resolving the package's declared dependencies avoids
+guessing that stack. It does not guarantee that every private build is compatible.
 
 ### Mixing both flags
 
@@ -355,32 +503,24 @@ Pass `--wasdk` too and you get a middle ground:
 .\ReproStudio.exe bug.cs --wasdk 2.2.0 --winui 2.3.0
 ```
 
-The WASDK version supplies everything (AI, ML, Widgets, DWrite and the rest), and
-the WinUI package raises anything below what it needs:
-
-```
-  . WinUI 2.3.0 needs Microsoft.WindowsAppSDK.Foundation 2.3.5, but this Windows
-    App SDK provides 2.1.0. Raising it.
-  . WinUI 2.3.0 needs Microsoft.WindowsAppSDK.InteractiveExperiences 2.1.3, but
-    this Windows App SDK provides 2.0.15. Raising it.
-```
-
-Versions are floors, not pins. Stock combinations already "disagree" numerically
-(WASDK 2.3.1 ships Foundation 2.3.5 while its WinUI asks for `>= 2.3.1`), so
-anything higher is fine and only lower gets raised.
+The WASDK package supplies the broader stack, while the explicit WinUI package
+replaces its WinUI choice. Shared dependency ranges must all be satisfied,
+including upper bounds; conflicts are errors, not permission to silently use an
+incompatible version. `--sdk match` follows this combined graph. An explicit
+`--sdk <version>` still chooses the managed API graph independently.
 
 ### Packages with no dependency metadata
 
 `tools\pack-local-winui.ps1` produces a shape-only nupkg. It has the right folder
-layout but no nuspec, so it cannot decide a stack:
+layout but no nuspec, so it cannot supply matched managed APIs or decide a stack.
+Supply both a native WASDK version and an API choice:
 
-```
-x Could not prepare a runner: ...nupkg declares no Windows App SDK dependencies,
-  so it cannot decide the stack on its own. Pass a Windows App SDK version as
-  well, or build the package with the WinUI repo's 'build.cmd /version <version>'.
+```powershell
+.\ReproStudio.exe bug.cs --wasdk 2.2.0 --sdk base --winui D:\private\shape-only.nupkg
 ```
 
-Add `--wasdk <version>` and it works as a plain overlay, exactly like `--payload`.
+Use an explicit `--sdk <version>` instead of `base` when newer APIs are needed.
+The shape-only package remains a native overlay, not the source of those APIs.
 
 ### NuGet sources
 
@@ -461,7 +601,7 @@ At the CLI's request, the Runner compiles and invokes this parameterless
 `static void` method before `Application.Start`, so it can configure process-wide
 state that must be set before XAML initializes. `EnableXamlOptionalChange` takes
 the numeric `XamlChangeId`, which
-also works when the runner's pinned managed projection predates that enum member.
+also works when the selected managed projection predates that enum member.
 
 Changing `OnProcessLaunch` changes the CLI's launch plan and restarts the Runner.
 Edits elsewhere, including XAML and `Setup`, still update the existing process.
@@ -475,9 +615,9 @@ a helper or constant outside it does not trigger a relaunch.
 
 `wasdk: 1.7` is enough. It matches your text against the real version list by
 dotted segments and picks the newest one that fits, so `1.7` finds
-`1.7.250401001`. An exact version still works too - and if you write a full
-version, no version list is fetched at all. A fully pinned repro runs offline
-once its runtime packages are cached or included in an offline bundle.
+`1.7.250401001`. An exact version skips the top-level version lookup. Preparing
+a new pair may still need feeds to resolve dependency ranges. For offline use,
+prepare the pair first and keep the base Runner, selections and payload unchanged.
 
 ### Packaged mode needs Developer Mode
 
@@ -548,8 +688,7 @@ or ARM64 architecture. API availability on the target OS remains your responsibi
 Run the rectangle/DPI demo from the repository root:
 
 ```powershell
-dotnet build
-.\out\Debug\x64\ReproStudio.exe samples\cswin32.cs
+dotnet run -- samples\cswin32.cs
 ```
 
 See [`samples/cswin32.cs`](../samples/cswin32.cs) and the
@@ -565,9 +704,17 @@ windows) will return `S_OK` and change nothing you can see.
 From the repo root:
 
 ```powershell
-dotnet build
-.\out\Debug\x64\ReproStudio.exe samples\hello.cs
+dotnet run
+dotnet run -- samples\hello.cs
 ```
+
+The first command opens the default hello demo; the second watches the source
+sample rather than the copy under `out`. Both build the real host and its
+build-only Runner dependency before launch.
+
+Use `dotnet build` to build without opening anything. The root
+`ReproStudio.csproj` is the host project, not a wrapper; its source remains under
+`src\ReproStudio.Cli`. The same-named solution keeps bare solution builds working.
 
 The projects write directly into the runnable layout:
 
@@ -584,8 +731,15 @@ out\Debug\x64\
 
 Use `dotnet build -c Release` for `out\Release\x64`, or add
 `-p:Platform=ARM64` / `-p:Platform=x86` to target another architecture. Solution
-and direct project builds use the same paths. A project build only rebuilds that
-project and its references; use the solution build to refresh the whole app.
+and root project builds use the same paths. For example:
+
+```powershell
+dotnet run -c Release -- samples\hello.cs
+dotnet build ReproStudio.csproj -p:Platform=ARM64
+```
+
+`dotnet run --no-build -- samples\hello.cs` deliberately skips the build.
+Use it only when the selected configuration/platform is already current.
 
 Use the `dotnet` CLI (SDK 10.x), not VS2022's MSBuild, which resolves an older
 SDK and fails on net10 with NETSDK1045.
@@ -608,3 +762,19 @@ Use `.\pack.ps1` for a Release zip to share. It uses the same solution build,
 then copies the built app and the current source repros for distribution.
 Local edits or extra repros in the build output are not included. `-NoZip` skips
 compression; private DLLs in the development output's `payload\` are not included.
+
+### Check the main workflow
+
+```powershell
+.\tools\smoke.ps1
+```
+
+The smoke script uses the existing .NET SDK and Windows/PowerShell tools, not
+a test framework. It builds into a private output folder and uses a separate
+runtime cache, so an old working Runner cannot hide a broken first-run path.
+It covers argument forwarding, the default sample, save/reload, invalid code,
+headless PNG output, and the portable bundle. A cold run needs NuGet access and
+a working graphical session.
+
+Failures return a nonzero exit code and print the artifact/log location.
+See `Get-Help .\tools\smoke.ps1 -Detailed` for targeted runs and artifact options.

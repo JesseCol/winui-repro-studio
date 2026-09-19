@@ -1,4 +1,5 @@
 using NuGet.Protocol.Core.Types;
+using ReproStudio.Shared;
 
 namespace ReproStudio_Cli;
 
@@ -17,7 +18,8 @@ internal static class WasdkVersionList
         string provisionedRoot = Path.Combine(cacheRoot, "versions");
         HashSet<string> provisioned = Directory.Exists(provisionedRoot)
             ? Directory.GetDirectories(provisionedRoot)
-                .Select(d => Path.GetFileName(d).Split("__")[0])
+                .Select(d => RunnerPairManifest.Read(d)?.Pair.NativeWasdkVersion)
+                .OfType<string>()
                 .ToHashSet(StringComparer.OrdinalIgnoreCase)
             : [];
 

@@ -3,7 +3,48 @@
 Back to the [README](../README.md).
 
 Skip this unless you want the guts. Short version: it's two processes talking
-through a JSON file, and your C# gets compiled at runtime with Roslyn.
+through JSON files, and your C# gets compiled at runtime with Roslyn.
+
+## Where to change what
+
+There are three production projects, not three ways to launch the tool. The root
+`ReproStudio.csproj` is the real console host; its C# stays under
+`src\ReproStudio.Cli`. `dotnet run` builds its dependencies and launches it.
+
+```text
+ReproStudio.csproj              host entry point
+ReproStudio.slnx                all three production projects
+src\ReproStudio.Cli\            commands, console output, file watching
+src\ReproStudio.Shared\         contracts, provisioning, process launch
+src\ReproStudio.Runner\         snippet compilation, UI, capture
+samples\                       small teaching repros
+tools\smoke.ps1                 end-to-end workflow checks
+```
+
+| Change | Start here |
+|---|---|
+| CLI flags or usage | `src\ReproStudio.Cli\CliOptions.cs` |
+| First run, save/relaunch behavior, version shortcut | `src\ReproStudio.Cli\ReproSession.cs` |
+| File format or request/result contract | `src\ReproStudio.Shared\SnippetFileParser.cs`, `Snippet.cs`, `RunnerResult.cs` |
+| Version resolution, downloads, runtime overlays | `src\ReproStudio.Shared\VersionResolver.cs`, `RunnerProvisioner.cs`, `NuGetFeed.cs` |
+| Starting/stopping a Runner, package identity | `src\ReproStudio.Shared\RunnerHost.cs`, `PackagedRunnerLauncher.cs` |
+| C# imports, diagnostics, generated Win32 bindings | `src\ReproStudio.Runner\Services\RoslynCompiler.cs`, `Win32Generator.cs` |
+| Preview, errors, log panel | `src\ReproStudio.Runner\MainWindow.cs`, `Services\RenderEngine.cs` |
+| Pin, Code and runtime dialog | `MainWindow.Toolbar.cs`, `RuntimeDialog.cs` in Runner; `ReproSession.Controls.cs` in Cli |
+| Runtime source edits and control IPC | `RuntimeHeaderEdit.cs`, `RunnerControl.cs` in Shared |
+| SDK/API payload, compatibility and pair cache | `SdkPackageGraph.cs`, `SdkPayload.cs`, `ManagedCompatibility.cs`, `RunnerPairManifest.cs` in Shared |
+| Cloaking and screenshot capture | `src\ReproStudio.Runner\Services\ScreenshotCapture.cs`, `WgcFrameSource.cs`, `WindowCaptureInterop.cs` |
+| Build layout or portable bundles | `Directory.Build.props`, `ReproStudio.csproj`, `pack.ps1` |
+
+The host's Runner reference is **build-only**: a fresh `dotnet run` refreshes
+`runner-base`, but it does not give the host a WinUI assembly or WASDK runtime
+dependency. Keep that boundary. The host must still diagnose a broken Runner.
+
+`dotnet run --project tools\RunnerContractTests` runs the lightweight contract
+checks (no test framework or WinUI dependency): encoding-preserving header edits,
+editor conflicts, preference writes, literal Code arguments, correlated IPC,
+SDK dependency/asset selection and pair-cache integrity.
+`tools\smoke.ps1 -SkipPackaging` covers root build/run and passive capture.
 
 ## The processes
 
@@ -15,22 +56,24 @@ through a JSON file, and your C# gets compiled at runtime with Roslyn.
             v
  +----------------------+
  |  ReproStudio.Runner  |  the preview window
- |  self-contained WASDK|  one per version
+ |  self-contained WASDK|  one SDK/runtime pair
  +----------------------+
 
   both processes reference ReproStudio.Shared
   (Snippet, RunnerHost, RunnerProvisioner, PackagedRunnerLauncher, AppLayout)
 ```
 
-- **Cli** is the console host. No WASDK reference at all.
+- **Host** (`ReproStudio.csproj`, source in `ReproStudio.Cli`) is the console
+  process. No WASDK assembly/runtime dependency.
 - **Runner** is a separate, throwaway process that does the actual rendering.
-  There's one Runner per WASDK version.
+  Each Runner loads one prepared SDK/API and native runtime pair.
 - **Shared** holds the `Snippet` contract and IPC used by both processes, plus
   the CLI's launcher, provisioner, and file-layout rules.
 
 Why separate processes? So we can render the same snippet against *different*
-WASDK versions. Each version gets its own Runner exe with that version's runtime
-DLLs next to it. The host just launches whichever one you asked for.
+SDK/API and native runtime combinations. Each prepared folder has one coherent
+managed API set and one native runtime. The host starts a fresh process when
+either choice changes.
 
 Notably, `Shared` uses `Windows.Management.Deployment.PackageManager` to register
 the packaged runner. That comes from the Windows SDK projection (free with a
@@ -39,28 +82,32 @@ console host stay WASDK-free.
 
 ## Running different WASDK versions
 
-This is the heart of the tool, and the trickiest part. The goal: run the same
-Runner against WASDK 1.5, or 1.7, or 2.2, without rebuilding it each time.
+This is the heart of the tool, and the trickiest part. The goal is to compile a
+snippet against one API surface and run it on a selected native implementation,
+without building a new Runner on the target machine.
 
 ### The base runner (built once)
 
-We build the Runner **once**, self-contained, against the latest WASDK. That
-build - the "base" - is found in one of two places:
+We build the Runner **once**, self-contained, against its baseline WASDK. That
+build - the "base" - provides the application and support runtime, and is found
+in one of two places:
 
 | Deployment | Where the base comes from |
 |---|---|
 | Normal build or portable bundle | `runner-base\` next to the host exe |
 | Legacy fallback | `%LOCALAPPDATA%\winui-repro-app\runner-base` |
 
-`dotnet build` writes the CLI directly into `out\<Configuration>\<Platform>\`
+`dotnet build` and `dotnet run` write the CLI directly into `out\<Configuration>\<Platform>\`
 and the Runner into its `runner-base\` subfolder. `pack.ps1` uses that same build
 and copies the built app for distribution, taking repro files from the source
 tree rather than editable build copies. The build needs no separate step to
 assemble the app. The legacy cache fallback remains for old layouts, but a
 normal build no longer uses it. `--doctor` tells you which one is in play.
 
-Either way, everything the tool *writes* goes to the cache root, so the bundle
-folder itself is read-only and can live on a share or a USB stick.
+Provisioned runtimes and downloads go to the cache root. Requests and logs go to
+the temporary directory; requested screenshots go to their explicit path or the
+working directory. The bundle itself can stay read-only on a share or USB stick,
+as long as the chosen screenshot location is writable.
 
 The base has three kinds of files:
 
@@ -80,30 +127,33 @@ The base has three kinds of files:
 > `bin` in the past and nothing cleans it up, so the runner's build deletes it
 > every time and `pack.ps1` refuses to ship one.
 
-### Making a runner for version X
+### Making a runner for an SDK/runtime pair
 
-When you pick version X, the host provisions a folder for it (see
-`RunnerProvisioner.EnsureRunnerAsync`):
+The host assembles a folder before launching it:
 
+```text
+base application + selected managed SDK/API + selected native runtime
+                                      + optional private payload
 ```
-  fresh copy of runner-base        version X's NATIVE dlls
-  (app + managed, left as-is)  +   (overlaid on top)         =  versions\X\
-```
 
-1. Copy the base into `versions\X\`.
-2. Download version X's NuGet packages (cached under `nupkgs\`, so this only
-   happens once per version).
-3. Overlay **only the native DLLs** from those packages over the copy.
-4. Launch `versions\X\ReproStudio.Runner.exe`.
+The SDK/API selection normally matches the runtime source. An explicit `sdk`
+version chooses a Windows App SDK managed surface independently. `sdk: base`
+is the explicit compatibility mode that retains the bundled managed API surface.
 
-The managed projections stay at the base version. Only the native DLLs change.
+Provisioning resolves the selected package graphs, chooses compatible managed
+assets for the target framework/RID, and prepares dependency metadata as well as
+DLLs. A WASDK-prefix-only dependency walk is not sufficient: external projection
+and support packages can be part of the managed closure. Reference-only
+assemblies are not executable projections.
 
-A provisioned folder is reused as-is next time, *unless* the base runner has been
-rebuilt since. The provisioner compares the base's `ReproStudio.Runner.dll`
-timestamp against the copy, and re-provisions when they differ. Without that check
-a fix to the Runner would never reach versions provisioned earlier - they'd serve
-the old binary forever and the bug would look like it came back. Re-provisioning
-reuses the cached downloads, so it re-copies but doesn't re-download.
+Compatible host framework/support assemblies can remain newer than a projection's
+minimum requirement. They must not be blindly downgraded: the Runner binary has
+its own requirements too. Conversely, old SDK-owned assemblies must not silently
+remain when the selected SDK has replaced or removed them.
+
+Cache identity includes both choices, their resolved assets, the base/support
+identity and architecture. The old native-only folder or a matching version label
+is not evidence that a managed SDK payload is correct.
 
 ### Two package layouts (the 1.8 split)
 
@@ -121,18 +171,26 @@ We tell them apart by asking "does the metapackage have `Microsoft.WindowsAppSDK
 dependencies?" - not by a version number - so the boundary is detected on its own
 and won't break if Microsoft moves it again.
 
-### Why swap only the native DLLs?
+### Why a coherent managed payload matters
 
-Because the Runner was **compiled** against the base version's managed assemblies,
-and those assembly versions are baked into the exe. Overlay a different version's
-managed `Microsoft.WinUI.dll` and the app dies at startup with "Could not load
-... Version=X". So we leave the managed side alone and swap only native.
+The original implementation swapped only native DLLs and pinned managed APIs to
+the base. That reproduced rendering changes, but selecting a newer runtime could
+not make a new C# property appear.
 
-It works because WinRT keeps a stable ABI for released types: the base's managed
-`Button` projection can drive version X's native `Button`, as long as the type
-existed in both. For repro scenarios (layout, rendering, common controls) that
-holds. The catch to know: the C# API surface your snippet sees is always the base
-version's, even though the *rendering* is version X's.
+Changing Roslyn's references alone is not a fix. The Runner's `Window` and the
+snippet's `Window` must be the same managed type. The selected projection must
+load consistently into the default assembly context before WinUI starts; snippet
+assemblies share it rather than loading a conflicting projection in their
+collectible contexts.
+
+Assembly identity and required APIs both matter. Equal assembly versions do not
+prove API compatibility, and higher compatible support dependencies should not be
+downgraded just to imitate a package's minimum dependency versions.
+
+With a newer SDK and older native runtime, common controls may work while a new
+API fails when its native interface is queried. That is an intentional
+compatibility experiment, distinct from a compiler rejecting a member absent
+from the selected SDK.
 
 ### Why self-contained, not framework-dependent?
 
@@ -150,10 +208,11 @@ target machine doesn't need a .NET runtime installed.
 
 ### Seeing which version really loaded
 
-The Runner window has a footer showing the version of the `Microsoft.ui.xaml.dll`
-it *actually* loaded (see `MainWindow.GetLoadedWinUiVersion`). It reads the loaded
-module, so it's ground truth, not a guess. If an overlay ever goes wrong, the
-wrong number shows up right there.
+The SDK/API identity and native runtime selection are reported separately.
+The native WinUI footer still reads the `Microsoft.ui.xaml.dll` module actually
+loaded (see `MainWindow.GetLoadedWinUiVersion`). Package versions, managed assembly
+versions and native file versions are different facts; none should be used as a
+substitute for the others.
 
 ### The cache
 
@@ -164,15 +223,14 @@ Everything lives under `%LOCALAPPDATA%\winui-repro-app\`, or wherever
 |---|---|
 | `runner-base\` | Legacy base runner fallback. Normal builds and bundles carry their own. |
 | `nupkgs\`      | Downloaded + extracted WASDK NuGet packages. |
-| `versions\`    | One assembled runner per version you've used. |
+| `versions\`    | Prepared SDK/API and runtime combinations. |
 | `local-winui\` | Extracted local WinUI `.nupkg` overrides. |
+| `runner-preferences.json` | Version-independent Pin preference, not deleted by `--clear-cache`. |
 
-A folder in `versions\` is named after what went into it: `1.7.250401001`, or
-`1.7.250401001__<winui-key>` with a `--winui` override, plus a `+payload` suffix
-when a payload folder was applied. Payload runners are kept separate so a run
-without one still gets untouched stock bits, and the suffix is fixed rather than
-per-payload so iterating on a DLL replaces the folder instead of leaving a
-350 MB copy behind every time.
+A provisioned folder's identity describes its SDK/runtime inputs and payload,
+not just one WASDK version string. Private-payload and stock configurations stay
+separate. Existing native-only cache folders are not upgraded by overwriting them
+with an unrelated API set.
 
 `--clear-cache` wipes `versions\` and `local-winui\`, keeping `nupkgs\` so
 re-provisioning is fast. Handy after you rebuild the base, or if a version folder
@@ -197,6 +255,17 @@ same folder still works for an unpackaged launch while registered.
 This needs Developer Mode. Without it, registration fails with `0x80073CFF` and
 the host falls back to an unpackaged launch, saying so.
 
+The fixed package identity is per Windows user. The host holds an exclusive
+`%LOCALAPPDATA%\winui-repro-app\packaged-runner.lock` file handle across launches,
+independent of `REPROSTUDIO_CACHE`. A competing host cannot replace the active
+registration. Switching pairs first removes the owned registration, then verifies
+the new `InstalledLocation`: registering the same identity/version at a new path
+can otherwise leave activation pointing at the old folder.
+
+Unregistration removes only the manifest and identity logos it staged. It must
+not delete `Assets\`, which also holds immutable files from the base Runner.
+Failed removal retains registration state and staged files so it can be retried.
+
 ## The IPC: it's just a file
 
 No pipes, no sockets, no localhost server. The host sends a JSON request file;
@@ -215,6 +284,9 @@ capture runs also write a JSON result beside it.
    re-renders. If the read catches a mid-write or locked file, `TryRead` returns
    null and it just waits for the next event.
 
+IPC readers, including test scripts, must share `ReadWrite | Delete`. A reader
+without delete sharing can block the writer's atomic replacement on Windows.
+
 So "switch WASDK version" is really just "launch a different Runner exe watching
 the same request file." No rebuild. Nice and dumb.
 
@@ -232,6 +304,31 @@ mode. A headless one-shot always stops its Runner; the existing visible
 no-watch mode leaves its window alive.
 
 ## Rendering a snippet
+
+The request also carries the original absolute source path, a host-resolved
+preference path, effective runtime selection, and (watch mode only) the host's
+session GUID/PID/start time. These are host metadata, not source headers.
+Legacy `topmost` JSON/header values are ignored.
+
+The toolbar's small reverse channel uses `request.control.json` and
+`request.control-result.json`. Only `list` and `apply` operations exist. Every
+command/response is correlated by command and session IDs; apply also validates
+the render request and Runner PID. The client serializes its operations, rejects
+stale responses, detects host exit, and imposes 45-second list / 5-minute apply
+deadlines. Cancellation withdraws the command, which cancels host provisioning.
+The host polls alongside its existing watch loop; listings use the existing
+provisioner's WASDK/WinUI methods and repro-local NuGet configuration.
+
+Runtime apply shares the reload/health semaphore. The host preflights the original
+source against the text attached to the current render request, so a save still
+waiting for debounce cannot be overwritten by a stale dialog. It provisions
+while the old Runner is usable, then compares the original
+bytes under an exclusive handle before writing just the runtime headers. Concurrent
+editor changes produce a retry error, never a blind overwrite. Only after commit
+does it retire runtime CLI overrides and replace the Runner. The header save's
+watcher event is deduplicated. New runtime requests are not published to the old
+Runner while preparation is pending. A launch failure after source commit is
+reported by the host; save the source to retry.
 
 A `Snippet` carries some XAML and optional C#. The Runner turns it into live UI
 in `RenderEngine.Render`:
@@ -253,15 +350,14 @@ with Roslyn (`Microsoft.CodeAnalysis.CSharp`) in `RoslynCompiler.Compile`:
 - We prepend a fixed block of `using`s so snippets stay short. One of them is
   `using static ReproStudio_Runner.ReproApi;`, which is how a snippet can just
   call `Log("hi")` and have it show up in the Runner's log panel.
-- The references are the Runner's *own already-loaded assemblies*
-  (`AppDomain.CurrentDomain.GetAssemblies()`). So your snippet compiles against
-  the very same WinUI assemblies the Runner is using - no separate SDK reference
-  that could drift out of sync. (That's the *managed* projection, which is pinned
-  to the base version - see "Running different WASDK versions" for why the native
-  side can be a different version.)
+- References come from the Runner's resolvable managed assemblies: the host's
+  trusted-platform list and app-local DLLs, with already-loaded assemblies taking
+  precedence by name. Lazy-loaded APIs are available without creating a second,
+  mismatched type identity. The managed projection is the SDK/API payload loaded
+  for this Runner, not necessarily its build-time SDK or selected native runtime.
 - It emits to a `MemoryStream` and loads that into a **collectible**
-  `AssemblyLoadContext`. Each edit unloads the previous one, so hammering the
-  editor doesn't leak an assembly per keystroke.
+  `AssemblyLoadContext`. Each edit requests unloading of the previous context;
+  collection can finish once nothing still holds its types, objects, or delegates.
 
 When the leading comment header contains `// win32:`, `Win32Generator` merges
 the comma-separated requests into an in-memory `NativeMethods.txt`. A fresh

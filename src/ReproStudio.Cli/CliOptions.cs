@@ -13,6 +13,8 @@ public sealed class CliOptions
     /// <summary>Windows App SDK version, overriding the file's <c>// wasdk:</c> header.</summary>
     public string? Wasdk { get; private set; }
 
+    public string? Sdk { get; private set; }
+
     /// <summary>WinUI override (a version or a local .nupkg), overriding <c>// winui:</c>.</summary>
     public string? WinUi { get; private set; }
 
@@ -63,11 +65,21 @@ public sealed class CliOptions
 
         Omit file.cs to run the bundled samples\hello.cs, regardless of the current folder.
 
+        from a source checkout:
+          dotnet run                         Build both processes and open the hello sample.
+          dotnet run -- samples\hello.cs     Edit a source sample in place.
+          dotnet run -- --help               Pass host options after "--".
+
         options:
           --wasdk <version>   Windows App SDK version. Partial is fine ("2.2" picks the
                               newest 2.2). Overrides the file's "// wasdk:" header.
           --winui <ver|path>  Override just the WinUI component: a version, or the path to
                               a local .nupkg. Overrides "// winui:".
+          --sdk <ver|match|base>
+                              SDK/API used to compile and execute C#. Default: match
+                              the native runtime source. A WASDK version selects APIs
+                              independently; base keeps the bundled managed APIs.
+                              Partial versions resolve like --wasdk. Overrides "// sdk:".
           --payload <dir>     Copy every file in <dir> over the runner, after the Windows
                               App SDK version is laid down. The quickest way to test a
                               private build: drop Microsoft.ui.xaml.dll in and run.
@@ -107,13 +119,14 @@ public sealed class CliOptions
 
             // repro:      a friendly name
             // wasdk:      2.2                 Windows App SDK version
+            // sdk:        match | base | 2.4.1-experimental
             // winui:      3.0.0-x  |  C:\p.nupkg  |  default
             // packaged:   yes | no            run with package identity
             // theme:      light | dark | default
             // flow:       ltr | rtl
             // dpi:        100 - 400
             // background: #202020
-            // topmost:    yes | no
+            // win32:      GetWindowRect, GetDpiForWindow
 
           The markup goes in a "string Xaml = ..." literal so the file stays valid C#.
           For CLI-only setup before XAML initializes, add:
@@ -213,6 +226,11 @@ public sealed class CliOptions
 
                     options.WinUi = winui;
                     break;
+                case "--sdk":
+                    if (!TryTakeValue(args, ref i, out string? sdk, out error)) return false;
+                    try { options.Sdk = ReproStudio.Shared.SdkSelection.Normalize(sdk); }
+                    catch (ArgumentException ex) { error = ex.Message; return false; }
+                    break;
                 case "--payload":
                     if (!TryTakeValue(args, ref i, out string? payload, out error))
                     {
@@ -244,7 +262,8 @@ public sealed class CliOptions
 
     private static bool TryTakeValue(string[] args, ref int i, out string? value, out string? error)
     {
-        if (i + 1 >= args.Length)
+        if (i + 1 >= args.Length || string.IsNullOrWhiteSpace(args[i + 1])
+            || args[i + 1].StartsWith('-') || args[i + 1] == "/?")
         {
             value = null;
             error = args[i] + " needs a value.";

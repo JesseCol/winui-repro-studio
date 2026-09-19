@@ -25,9 +25,9 @@ public sealed class CompileResult
 
 /// <summary>
 /// Compiles a snippet's C# into an in-memory assembly using Roslyn. It references
-/// the runner's own loaded assemblies, so the snippet always builds against the
-/// exact WinUI version on screen. Each compile uses a fresh collectible load
-/// context, and the previous one is unloaded to avoid leaking on every edit.
+/// the runner's resolvable managed assemblies; projections are selected as a
+/// coherent SDK before process startup. Each compile uses a fresh
+/// collectible load context and requests unloading of the previous one.
 /// </summary>
 public sealed class RoslynCompiler
 {

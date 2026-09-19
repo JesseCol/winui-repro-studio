@@ -18,7 +18,7 @@ namespace ReproStudio_Runner;
 /// WASDK version stamp. It reads a snippet file, renders it on the stage, and
 /// watches the file so edits from the host hot-reload without a relaunch.
 /// </summary>
-public sealed class MainWindow : Window
+public sealed partial class MainWindow : Window
 {
     private readonly string? _requestPath;
     private readonly bool _isHeadless;
@@ -31,6 +31,7 @@ public sealed class MainWindow : Window
     private readonly TextBlock _logText;
     private readonly ScrollViewer _logScroller;
     private readonly InfoBar _errorBar;
+    private readonly TextBlock _apiText = new() { TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true };
     private FileSystemWatcher? _watcher;
     private bool _topmost;
     private bool _closed;
@@ -101,6 +102,8 @@ public sealed class MainWindow : Window
         Closed += (s, e) =>
         {
             _closed = true;
+            CloseToolbar();
+            Activated -= OnActivated;
             _captureCancellation?.Cancel();
             _debounceTimer.Stop();
             _watcher?.Dispose();
@@ -142,13 +145,13 @@ public sealed class MainWindow : Window
         logGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         logGrid.Children.Add(logHeader);
         logGrid.Children.Add(logBorder);
-        Grid.SetRow(logGrid, 1);
+        Grid.SetRow(logGrid, 3);
 
-        Grid.SetRow(_errorBar, 2);
+        Grid.SetRow(_errorBar, 4);
 
         var versionText = new TextBlock
         {
-            Text = GetLoadedWinUiVersion(),
+            Text = "Native loaded: " + GetLoadedWinUiVersion(),
             Margin = new Thickness(8, 2, 8, 4),
             IsTextSelectionEnabled = true,
             TextWrapping = TextWrapping.NoWrap,
@@ -156,17 +159,30 @@ public sealed class MainWindow : Window
         };
         TrySetStyle(versionText, "CaptionTextBlockStyle");
         AutomationProperties.SetName(versionText, "Loaded WinUI version");
-        Grid.SetRow(versionText, 3);
+        AutomationProperties.SetAutomationId(versionText, "RunnerNativeVersion");
+        AutomationProperties.SetAutomationId(_apiText, "RunnerApiVersion");
+        TrySetStyle(_apiText, "CaptionTextBlockStyle");
+        _apiText.Margin = new Thickness(8, 4, 8, 0);
+        var versions = new StackPanel();
+        versions.Children.Add(_apiText);
+        versions.Children.Add(versionText);
+        Grid.SetRow(versions, 5);
 
         var root = new Grid { Background = TryGetBrush("ApplicationPageBackgroundThemeBrush") };
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        root.Children.Add(BuildToolbar());
+        Grid.SetRow(_toolbarErrorBar, 1);
+        root.Children.Add(_toolbarErrorBar);
+        Grid.SetRow(_stage, 2);
         root.Children.Add(_stage);
         root.Children.Add(logGrid);
         root.Children.Add(_errorBar);
-        root.Children.Add(versionText);
+        root.Children.Add(versions);
         return root;
     }
 
@@ -268,6 +284,7 @@ public sealed class MainWindow : Window
             return;
         }
 
+        UpdateToolbar(snippet);
         _captureCancellation?.Cancel();
         long generation = ++_renderGeneration;
         if (_isHeadless && !VerifyHeadlessMode()) return;
@@ -289,6 +306,8 @@ public sealed class MainWindow : Window
         try
         {
             ClearLog();
+            if (!LoadedSdk.Matches(snippet))
+                throw new InvalidOperationException("The running managed projection does not match the provisioned SDK/API pair. Restart using the host; refusing to compile against a different SDK.");
             ApplyWindowOptions(snippet);
             RenderResult result = _engine.Render(snippet, this);
             if (result.Success)
@@ -302,11 +321,12 @@ public sealed class MainWindow : Window
             {
                 CrashLog.Log(
                     $"Render failed ({result.Phase}): "
-                    + (result.Diagnostic ?? result.Error ?? "Unknown error."));
+                    + (result.Diagnostic ?? result.Error ?? "Unknown error.") + "\n" + LoadedSdk.Context(snippet));
                 // Do not show an old preview underneath a screenshot of a new error.
                 if (_screenshotPath is not null) _stage.Content = null;
-                ShowError(result.Phase, result.Error);
-                response.RenderError = $"{result.Phase}: {result.Error ?? "Unknown error."}";
+                string detail = (result.Error ?? "Unknown error.") + "\n" + LoadedSdk.Context(snippet);
+                ShowError(result.Phase, detail);
+                response.RenderError = $"{result.Phase}: {detail}";
             }
         }
 #pragma warning disable CA1031 // Last-resort guard: a reload must never crash the runner.
@@ -316,7 +336,7 @@ public sealed class MainWindow : Window
             CrashLog.Log("LoadAndRender failed: " + ex);
             if (_screenshotPath is not null) _stage.Content = null;
             ShowError("runtime", ex.Message);
-            response.RenderError = "runtime: " + ex.Message;
+            response.RenderError = "runtime: " + ex.Message + "\n" + LoadedSdk.Context(snippet);
         }
 
         return response;
@@ -498,7 +518,6 @@ public sealed class MainWindow : Window
     /// </summary>
     private void ApplyWindowOptions(Snippet snippet)
     {
-        _topmost = !_isHeadless && snippet.Topmost;
         ApplyTopmost();
     }
 
@@ -519,18 +538,11 @@ public sealed class MainWindow : Window
             return;
         }
 
-        try
+        try { SetTopmost(_topmost); }
+        catch (Exception ex) when (IsToolbarFailure(ex))
         {
-            if (AppWindow.Presenter is OverlappedPresenter presenter)
-            {
-                presenter.IsAlwaysOnTop = _topmost;
-            }
-        }
-        catch (Exception ex)
-        {
-            // Keep-on-top is cosmetic, and the presenter can go invalid underneath us
-            // during teardown. The runner exists to survive bad states, so log and live.
-            CrashLog.Log("ApplyTopmost failed (ignored): " + ex.Message);
+            _pinButton.IsChecked = ReadTopmost();
+            ShowToolbarError("Pin", ex.Message);
         }
     }
 
@@ -556,6 +568,7 @@ public sealed class MainWindow : Window
 
         DispatcherQueue.TryEnqueue(() =>
         {
+            if (_closed) return;
             _logText.Text = _logText.Text.Length == 0 ? message : _logText.Text + "\n" + message;
             _logScroller.UpdateLayout();
             _logScroller.ChangeView(null, _logScroller.ScrollableHeight, null, true);

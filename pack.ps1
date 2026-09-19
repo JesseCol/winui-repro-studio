@@ -99,7 +99,7 @@ if ($LocalWinUi) {
 }
 
 $solution = Join-Path $repoRoot 'ReproStudio.slnx'
-$cliProject = Join-Path $repoRoot 'src\ReproStudio.Cli\ReproStudio.Cli.csproj'
+$cliProject = Join-Path $repoRoot 'ReproStudio.csproj'
 $runnerProject = Join-Path $repoRoot 'src\ReproStudio.Runner\ReproStudio.Runner.csproj'
 
 $buildArgs = @(
@@ -286,7 +286,7 @@ if ($Preprovision) {
             $label = if ($variant.Count -gt 0) { "$version + local WinUI" } else { $version }
             Write-Host "  Pre-provisioning $label..." -ForegroundColor DarkGray
 
-            $runArgs = @($seed, '--wasdk', $version, '--provision-only') + $variant
+            $runArgs = @($seed, '--wasdk', $version, '--sdk', 'match', '--provision-only') + $variant
             # REPROSTUDIO_CACHE only for this child process, so packing never disturbs
             # the packer's own cache.
             $previous = $env:REPROSTUDIO_CACHE

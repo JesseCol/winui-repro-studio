@@ -45,9 +45,23 @@ public sealed class RunnerHost : IDisposable
         public bool IsPackaged { get; init; }
     }
 
-    public int? ProcessId => _process is { HasExited: false } ? _process.Id : null;
+    public int? ProcessId
+    {
+        get
+        {
+            Process? process = _process;
+            try { return process is { HasExited: false } ? process.Id : null; }
+            catch (InvalidOperationException)
+            {
+                // The control cancellation monitor can race a deliberate Stop/Dispose.
+                return null;
+            }
+        }
+    }
 
     public string ResultPath => RunnerResultIo.GetPath(_requestPath);
+
+    public string RequestPath => _requestPath;
 
     public Guid WriteRequest(Snippet snippet)
     {
@@ -110,18 +124,15 @@ public sealed class RunnerHost : IDisposable
     {
         KillProcess();
 
-        if (_packagedLauncher.IsRegistered)
+        try
         {
-            try
-            {
-                _packagedLauncher.UnregisterAsync().Wait(TimeSpan.FromSeconds(5));
-            }
+            _packagedLauncher.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(5));
+        }
 #pragma warning disable CA1031 // Best-effort cleanup on shutdown; never throw from Dispose.
-            catch (Exception)
+        catch (Exception)
 #pragma warning restore CA1031
-            {
-                // Leave the dev package registered; it is harmless and reconciled next run.
-            }
+        {
+            // Leave a failed registration intact rather than deleting its assets.
         }
     }
 

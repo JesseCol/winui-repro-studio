@@ -2,7 +2,14 @@
 
 Ready-to-run single-file repros.
 
-From the built or unzipped bundle folder:
+From the repository root:
+
+```powershell
+dotnet run
+dotnet run -- samples\counter.cs
+```
+
+From a built or unzipped bundle folder:
 
 ```powershell
 .\ReproStudio.exe
@@ -19,16 +26,26 @@ the pinned teaching examples use WASDK 2.x.
 
 | File | What it shows |
 |---|---|
-| [hello.cs](hello.cs) | The basics: a header, XAML in a raw-string, a button wired up in `Setup`. |
+| [hello.cs](hello.cs) | A feature quick tour, XAML, a button wired up in `Setup`, and a generated Win32 call for a dark title bar on Windows 11. |
 | [counter.cs](counter.cs) | C# driving the XAML (a click counter), plus `theme: Dark`. |
 | [full-header.cs](full-header.cs) | Launch and display headers, annotated. Good starting point for a new repro. |
 | [pinvoke.cs](pinvoke.cs) | Your own `using` directives and `[DllImport]`. Gets the HWND and calls into `dwmapi`. |
 | [cswin32.cs](cswin32.cs) | `// win32:` generates bindings with CsWin32. Reads the window rectangle and DPI. |
 
+Start with **hello**, then **counter** to see state and events. Use **cswin32**
+for generated interop, or **pinvoke** when you want to supply the declarations
+yourself. **full-header** explains launch/display choices; it is not a template
+you must fill out.
+
+Copy a sample before turning it into your own bug. The default no-file launch
+opens a build copy; passing `samples\hello.cs` from the repo root opens the source
+file instead. Keep the `class Repro` wrapper and `const string Xaml` literal.
+
 ## The format, in one breath
 
 ```csharp
 // repro:      My cool bug     <- friendly name
+// sdk:        match           <- API surface: match | base | WASDK version
 // wasdk:      2.2             <- partial ok; newest 2.2.x wins
 // winui:      default         <- version | path to a .nupkg | default
 // payload:    none            <- folder of files to copy over the runner
@@ -37,7 +54,6 @@ the pinned teaching examples use WASDK 2.x.
 // flow:       LeftToRight     <- LeftToRight | RightToLeft
 // dpi:        100             <- 100 to 400
 // background: #202020         <- stage colour behind your XAML
-// topmost:    no              <- keep the runner above other windows
 // win32:      GetWindowRect, GetDpiForWindow  <- generate Win32 bindings
 
 class Repro
@@ -54,8 +70,17 @@ Two kinds of key:
 
 | Kind | Keys | On save |
 |---|---|---|
-| Live | `theme`, `flow`, `background`, `topmost`, `win32`, and the XAML/C# itself | re-renders in place |
-| Launch-time | `wasdk`, `winui`, `payload`, `packaged`, `dpi` | provisions and relaunches the runner |
+| Live | `theme`, `flow`, `background`, `win32`, and the XAML/C# itself | re-renders in place |
+| Launch-time | `sdk`, `wasdk`, `winui`, `payload`, `packaged`, `dpi` | provisions and relaunches the runner |
+
+The SDK/API surface matches the native runtime by default. Add `// sdk: <version>`
+to compile against a different Windows App SDK, or `// sdk: base` to keep the
+bundled API surface. This is separate from choosing WASDK or WinUI as the native
+runtime source. New SDK APIs can compile but fail when called on an older runtime.
+See the [SDK/runtime guide](../docs/guide.md#sdkapi-and-runtime).
+
+Pin is a Runner toolbar preference shared across launches, not a repro header.
+Legacy `// topmost:` comments are ignored and left untouched.
 
 > The `Xaml` literal is required. Without a `const string Xaml = """..."""` the
 > runner has nothing to render and never calls `Setup`, and the console says so.
@@ -81,8 +106,7 @@ Or use [cswin32.cs](cswin32.cs) for generated bindings:
 
 ```powershell
 # From the repository root:
-dotnet build
-.\out\Debug\x64\ReproStudio.exe samples\cswin32.cs
+dotnet run -- samples\cswin32.cs
 # From an unzipped bundle:
 .\ReproStudio.exe samples\cswin32.cs
 ```

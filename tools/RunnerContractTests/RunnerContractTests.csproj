@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <RuntimeIdentifier>win-$(Platform.ToLowerInvariant())</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\ReproStudio.Shared\ReproStudio.Shared.csproj" />
+    <Compile Include="..\..\src\ReproStudio.Runner\Services\CodeEditor.cs" Link="CodeEditor.cs" />
+    <Compile Include="..\..\src\ReproStudio.Runner\Services\RunnerControlClient.cs" Link="RunnerControlClient.cs" />
+    <Compile Include="..\..\src\ReproStudio.Runner\Services\CrashLog.cs" Link="CrashLog.cs" />
+  </ItemGroup>
+</Project>

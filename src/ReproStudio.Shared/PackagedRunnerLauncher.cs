@@ -32,7 +32,7 @@ namespace ReproStudio.Shared;
 /// unpackaged launch with the reason printed to the console.
 /// </para>
 /// </summary>
-public sealed class PackagedRunnerLauncher
+public sealed class PackagedRunnerLauncher : IAsyncDisposable
 {
     // These three must match RunnerIdentity\Package.appxmanifest in this project.
     private const string PackageName = "ReproStudio.Runner";
@@ -54,6 +54,7 @@ public sealed class PackagedRunnerLauncher
 
     private string? _registeredFolder;
     private string? _aumid;
+    private FileStream? _registrationLease;
 
     public PackagedRunnerLauncher() =>
         _manifestSourceDir = IdentitySourceDir;
@@ -84,13 +85,44 @@ public sealed class PackagedRunnerLauncher
     {
         ArgumentException.ThrowIfNullOrEmpty(versionFolder);
 
-        if (_aumid is not null && string.Equals(_registeredFolder, versionFolder, StringComparison.OrdinalIgnoreCase))
-        {
-            return new RegisterResult(true, _aumid, string.Empty);
-        }
-
         try
         {
+            // Package identity is per-user, not per-cache. Keep ownership across
+            // awaits and pair switches; an OS file handle also releases on a crash.
+            _registrationLease ??= OpenRegistrationLease(Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "winui-repro-app", "packaged-runner.lock"));
+            Package? registered = FindPackage();
+            if (_registeredFolder is null && registered is not null)
+                return new RegisterResult(false, string.Empty,
+                    "A Runner package is already registered outside this session. Close its host, or remove the stale ReproStudio.Runner registration before retrying.");
+            if (_aumid is not null && _registeredFolder is not null
+                && SameFolder(_registeredFolder, versionFolder)
+                && registered is not null && SameFolder(registered.InstalledLocation.Path, versionFolder))
+            {
+                return new RegisterResult(true, _aumid, string.Empty);
+            }
+
+            if (_registeredFolder is not null && !SameFolder(_registeredFolder, versionFolder))
+            {
+                // The identity/version stays constant across pairs. Re-registering a
+                // different path alone can leave activation pointing at the old SDK.
+                if (registered is not null)
+                {
+                    if (!SameFolder(registered.InstalledLocation.Path, _registeredFolder))
+                        return new RegisterResult(false, string.Empty, "Another host changed the Runner registration. Close that packaged session and retry.");
+                    DeploymentResult removal = await _packageManager
+                        .RemovePackageAsync(registered.Id.FullName, RemovalOptions.None)
+                        .AsTask().ConfigureAwait(false);
+                    if (removal.ExtendedErrorCode is not null)
+                        return new RegisterResult(false, string.Empty, Explain(removal.ExtendedErrorCode));
+                }
+                string previousFolder = _registeredFolder;
+                _registeredFolder = null;
+                _aumid = null;
+                UnstageManifest(previousFolder, _manifestSourceDir);
+            }
+
             // The version folder IS the package root, so the manifest and its assets have to live
             // there. Both are inert for a plain CreateProcess, so leaving them in place while
             // registered does not affect an unpackaged launch from the same folder.
@@ -106,14 +138,18 @@ public sealed class PackagedRunnerLauncher
                 return new RegisterResult(false, string.Empty, Explain(result.ExtendedErrorCode));
             }
 
-            string? familyName = FindPackage()?.Id.FamilyName;
-            if (familyName is null)
+            Package? package = FindPackage();
+            if (package is null)
             {
                 return new RegisterResult(false, string.Empty, "The package registered but could not be found.");
             }
+            if (!SameFolder(package.InstalledLocation.Path, versionFolder))
+                return new RegisterResult(false, string.Empty,
+                    "Runner registration still points at " + package.InstalledLocation.Path
+                    + ", not the selected SDK/runtime folder " + versionFolder + ".");
 
             _registeredFolder = versionFolder;
-            _aumid = familyName + "!" + ApplicationId;
+            _aumid = package.Id.FamilyName + "!" + ApplicationId;
             return new RegisterResult(true, _aumid, string.Empty);
         }
 #pragma warning disable CA1031 // Surface a staging/registration failure to the caller.
@@ -122,7 +158,32 @@ public sealed class PackagedRunnerLauncher
         {
             return new RegisterResult(false, string.Empty, Explain(ex));
         }
+        finally
+        {
+            if (_registeredFolder is null)
+            {
+                _registrationLease?.Dispose();
+                _registrationLease = null;
+            }
+        }
     }
+
+    internal static FileStream OpenRegistrationLease(string path)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        try
+        {
+            return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        }
+        catch (IOException ex) when ((ex.HResult & 0xffff) is 32 or 33)
+        {
+            throw new InvalidOperationException("Another host owns packaged Runner mode. Close that packaged session and retry.", ex);
+        }
+    }
+
+    private static bool SameFolder(string left, string right) =>
+        string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(left)),
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(right)), StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Activates the packaged runner by AUMID with the given command-line arguments and returns
@@ -158,27 +219,38 @@ public sealed class PackagedRunnerLauncher
         }
 
         string folder = _registeredFolder;
+        Package? package = FindPackage();
+        if (package is not null)
+        {
+            if (!SameFolder(package.InstalledLocation.Path, folder))
+                throw new InvalidOperationException("Another host changed the Runner registration; this session will not remove it.");
+            DeploymentResult result = await _packageManager
+                .RemovePackageAsync(package.Id.FullName, RemovalOptions.None)
+                .AsTask()
+                .ConfigureAwait(false);
+            if (result.ExtendedErrorCode is not null)
+                throw new InvalidOperationException("Could not unregister the Runner: " + Explain(result.ExtendedErrorCode), result.ExtendedErrorCode);
+        }
+
+        // Preserve registration state and its assets until removal succeeds.
         _registeredFolder = null;
         _aumid = null;
+        UnstageManifest(folder, _manifestSourceDir);
+        _registrationLease?.Dispose();
+        _registrationLease = null;
+    }
 
+    public async ValueTask DisposeAsync()
+    {
         try
         {
-            Package? package = FindPackage();
-            if (package is not null)
-            {
-                await _packageManager
-                    .RemovePackageAsync(package.Id.FullName, RemovalOptions.None)
-                    .AsTask()
-                    .ConfigureAwait(false);
-            }
+            await UnregisterAsync().ConfigureAwait(false);
         }
-#pragma warning disable CA1031 // A stale dev registration is harmless and gets replaced next run.
-        catch (Exception)
-#pragma warning restore CA1031
+        finally
         {
+            _registrationLease?.Dispose();
+            _registrationLease = null;
         }
-
-        UnstageManifest(folder);
     }
 
     /// <summary>
@@ -205,10 +277,17 @@ public sealed class PackagedRunnerLauncher
     }
 
     /// <summary>Removes what <see cref="StageManifest"/> put in the version folder.</summary>
-    private static void UnstageManifest(string versionFolder)
+    internal static void UnstageManifest(string versionFolder, string manifestSourceDir)
     {
         TryDeleteFile(Path.Combine(versionFolder, DeployedManifestName));
-        TryDeleteDirectory(Path.Combine(versionFolder, "Assets"));
+        // This folder can also contain immutable assets from runner-base.
+        // Remove only the identity files that StageManifest copied, not the tree.
+        string assetsSource = Path.Combine(manifestSourceDir, "Assets");
+        if (Directory.Exists(assetsSource))
+        {
+            foreach (string file in Directory.EnumerateFiles(assetsSource))
+                TryDeleteFile(Path.Combine(versionFolder, "Assets", Path.GetFileName(file)));
+        }
     }
 
     private Package? FindPackage() =>
@@ -235,24 +314,6 @@ public sealed class PackagedRunnerLauncher
         catch (IOException)
         {
             // A leftover packaging file is tolerable; don't fail the launch over it.
-        }
-        catch (UnauthorizedAccessException)
-        {
-        }
-    }
-
-    private static void TryDeleteDirectory(string path)
-    {
-        try
-        {
-            if (Directory.Exists(path))
-            {
-                Directory.Delete(path, recursive: true);
-            }
-        }
-        catch (IOException)
-        {
-            // Same as TryDeleteFile: a leftover Assets folder is harmless.
         }
         catch (UnauthorizedAccessException)
         {

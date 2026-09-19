@@ -13,8 +13,7 @@ internal static class Program
         if (!CliOptions.TryParse(args, out CliOptions options, out string? error))
         {
             Log.Error(error!);
-            Log.Blank();
-            Log.Raw(CliOptions.Usage);
+            Log.Detail("Use ReproStudio --help for options, or dotnet run -- --help from source.");
             return 2;
         }
 

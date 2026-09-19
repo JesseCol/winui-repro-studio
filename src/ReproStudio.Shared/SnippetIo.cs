@@ -35,7 +35,25 @@ public static class SnippetIo
         try
         {
             File.WriteAllText(temp, json);
-            File.Move(temp, path, overwrite: true);
+            for (int attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    // ReplaceFile preserves open delete-sharing reader handles.
+                    // MoveFileEx(REPLACE_EXISTING) can return access denied instead.
+                    if (File.Exists(path)) File.Replace(temp, path, destinationBackupFileName: null);
+                    else File.Move(temp, path);
+                    break;
+                }
+                catch (IOException ex) when (attempt < 9 && IsRetryableReplaceError(ex.HResult & 0xffff))
+                {
+                    Thread.Sleep(20);
+                }
+                catch (UnauthorizedAccessException) when (attempt < 9)
+                {
+                    Thread.Sleep(20);
+                }
+            }
         }
         finally
         {
@@ -45,6 +63,11 @@ public static class SnippetIo
             }
         }
     }
+
+    // ReplaceFile error 1175 leaves both original names intact, so retrying is
+    // safe. Errors 1176/1177 can move/delete one name and must not be retried here.
+    internal static bool IsRetryableReplaceError(int error) =>
+        error is 2 or 5 or 32 or 33 or 80 or 183 or 1175;
 
     /// <summary>
     /// Tries to read a snippet. Returns null if the file is missing, locked,
@@ -56,7 +79,11 @@ public static class SnippetIo
     {
         try
         {
-            string json = File.ReadAllText(path);
+            // A polling reader must not prevent Windows from atomically replacing
+            // request/control/result files during a Runner restart.
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream);
+            string json = reader.ReadToEnd();
             return JsonSerializer.Deserialize<T>(json, Options);
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)

@@ -14,6 +14,8 @@
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- The project is at the root for dotnet run; only the CLI is compiled here. -->
+    <EnableDefaultItems>false</EnableDefaultItems>
 
     <!--
       The console host, and the thing the xcopy bundle actually ships.
@@ -36,14 +38,22 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="src\ReproStudio.Cli\**\*.cs"
+             Exclude="src\ReproStudio.Cli\**\bin\**;src\ReproStudio.Cli\**\obj\**" />
     <!-- Carry an inferred Platform through even when the SDK strips the app RID. -->
-    <ProjectReference Include="..\ReproStudio.Shared\ReproStudio.Shared.csproj" AdditionalProperties="Platform=$(Platform)" />
+    <ProjectReference Include="src\ReproStudio.Shared\ReproStudio.Shared.csproj" AdditionalProperties="Platform=$(Platform)" />
+    <!-- Build the real Runner, but consume neither its assembly, NuGet assets nor
+         copy-to-output content. It writes its own self-contained runner-base folder. -->
+    <ProjectReference Include="src\ReproStudio.Runner\ReproStudio.Runner.csproj"
+                      AdditionalProperties="Platform=$(Platform)"
+                      ReferenceOutputAssembly="false" Private="false"
+                      ExcludeAssets="all" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="..\..\samples\**\*" Link="samples\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="..\..\probes\**\*" Link="probes\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="..\..\investigations\**\*" Link="investigations\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="samples\**\*" Link="samples\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="probes\**\*" Link="probes\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="investigations\**\*" Link="investigations\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- Never delete or track user payload files as build outputs. -->

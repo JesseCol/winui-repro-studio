@@ -1,4 +1,4 @@
-// repro:      Every header key
+// repro:      Launch and display options
 // wasdk:      2.2
 // winui:      default
 // payload:    none
@@ -7,11 +7,10 @@
 // flow:       LeftToRight
 // dpi:        100
 // background: #1F1F2E
-// topmost:    no
 
-// Every supported header key, with a note on each. Copy this file as a starting
+// Launch and display headers, with a note on each. Copy this file as a starting
 // point for a new repro and delete the lines you don't need - every key is
-// optional, and order doesn't matter.
+// optional, and order doesn't matter. For the win32 header, see cswin32.cs.
 //
 //   repro       Friendly name. Shows up in the runner's title bar.
 //   wasdk       WASDK version. Partial is fine: "2.2" picks the newest 2.2.x.
@@ -30,9 +29,9 @@
 //   flow        LeftToRight | RightToLeft
 //   dpi         100 to 400. Scale factor the runner launches at.
 //   background  Stage colour behind your XAML. Any XAML colour string.
-//   topmost     yes/no. Keeps the runner above other windows.
 //
-// theme, flow, background and topmost apply live on save. wasdk, winui, payload,
+// Pin is a Runner preference, not a header. The toolbar remembers it across runs.
+// theme, flow and background apply live on save. wasdk, winui, payload,
 // packaged and dpi relaunch the runner, so they take a couple of seconds.
 
 class Repro
@@ -40,21 +39,25 @@ class Repro
     const string Xaml = """
         <StackPanel xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                    Padding="24" Spacing="12" Width="360">
-            <TextBlock Text="Every header key" FontSize="28" />
-            <TextBlock x:Name="Details" TextWrapping="Wrap" Opacity="0.8" />
-            <Button x:Name="WhatAmIRunning" Content="What am I running?"
-                    HorizontalAlignment="Stretch" />
+                    Padding="24" Spacing="12">
+            <TextBlock Text="Launch and display options" Style="{StaticResource TitleTextBlockStyle}" />
+            <TextBlock Text="Change a header and save. Display options update here; runtime options restart the Runner."
+                       TextWrapping="Wrap" />
+            <TextBlock x:Name="Details" TextWrapping="Wrap" />
+            <Button x:Name="WhatAmIRunning" AutomationProperties.AutomationId="WhatAmIRunning"
+                    Content="What am I running?" />
         </StackPanel>
         """;
 
     static void Setup(FrameworkElement root, Window window)
     {
-        window.Title = "Every header key";
+        window.Title = "Launch and display options";
 
         if (root.FindName("Details") is TextBlock details)
         {
-            details.Text = $"Theme is {root.ActualTheme}, flow is {root.FlowDirection}.";
+            // The host applies theme and flow when it attaches the repro to the stage.
+            root.Loaded += (_, _) =>
+                details.Text = $"Theme is {root.ActualTheme}, flow is {root.FlowDirection}.";
         }
 
         if (root.FindName("WhatAmIRunning") is Button button)

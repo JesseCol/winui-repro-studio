@@ -4,11 +4,13 @@
     <Platform Name="x64" />
     <Platform Name="ARM64" />
   </Configurations>
+  <!-- Match the solution basename so bare dotnet build selects the solution,
+       while dotnet run discovers the real console host project. -->
+  <Project Path="ReproStudio.csproj">
+    <Platform Project="*" />
+  </Project>
   <Folder Name="/src/">
     <!-- C# otherwise maps every solution platform to AnyCPU. -->
-    <Project Path="src/ReproStudio.Cli/ReproStudio.Cli.csproj">
-      <Platform Project="*" />
-    </Project>
     <Project Path="src/ReproStudio.Runner/ReproStudio.Runner.csproj">
       <Platform Project="*" />
     </Project>

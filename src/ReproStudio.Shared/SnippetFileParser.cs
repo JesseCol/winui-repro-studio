@@ -21,6 +21,8 @@ public sealed class ParsedSnippetFile
     /// <summary>Windows App SDK version from the header (<c>// wasdk:</c>), or null.</summary>
     public string? WasdkVersion { get; init; }
 
+    public string? Sdk { get; init; }
+
     /// <summary>
     /// WinUI override from the header (<c>// winui:</c>): a version, a path to a
     /// local <c>.nupkg</c>, or null when the header says "default" / is missing.
@@ -52,9 +54,6 @@ public sealed class ParsedSnippetFile
     /// <summary>Live stage background from <c>// background:</c>, e.g. "#202020".</summary>
     public string? Background { get; init; }
 
-    /// <summary>Live: keep the runner window above other windows (<c>// topmost:</c>).</summary>
-    public bool Topmost { get; init; }
-
     /// <summary>The XAML pulled from the file's <c>string Xaml</c> literal.</summary>
     public string Xaml { get; init; } = string.Empty;
 
@@ -84,8 +83,8 @@ public static class SnippetFileParser
 
     private static readonly HashSet<string> KnownKeys = new(StringComparer.OrdinalIgnoreCase)
     {
-        "repro", "title", "wasdk", "winui", "payload", "packaged", "dpi",
-        "theme", "flow", "background", "topmost",
+        "repro", "title", "wasdk", "winui", "sdk", "payload", "packaged", "dpi",
+        "theme", "flow", "background",
     };
 
     /// <summary>Parses the file text into its header + XAML + C# parts.</summary>
@@ -103,6 +102,7 @@ public static class SnippetFileParser
         {
             Title = title,
             WasdkVersion = Get(header, "wasdk"),
+            Sdk = Get(header, "sdk"),
             WinUiToken = winuiToken,
             PayloadDir = Get(header, "payload"),
             Packaged = ParseBool(Get(header, "packaged")),
@@ -110,7 +110,6 @@ public static class SnippetFileParser
             Theme = NormalizeTheme(Get(header, "theme")),
             FlowDirection = NormalizeFlow(Get(header, "flow")),
             Background = Get(header, "background"),
-            Topmost = ParseBool(Get(header, "topmost")) ?? false,
             Xaml = xaml,
             CSharp = fileText,
             ProcessLaunchKey = ProcessLaunchMethod.GetFingerprint(fileText),

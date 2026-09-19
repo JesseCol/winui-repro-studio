@@ -8,8 +8,8 @@ the short version of what an agent needs to not break things.
 
 | Project | What | WASDK? |
 |---|---|---|
-| `ReproStudio.Cli` | CLI, `ReproStudio.exe`. The entry point. | No |
-| `ReproStudio.Runner` | The preview process. One copy per WASDK version. | Yes |
+| `ReproStudio.csproj` (root) | CLI, `ReproStudio.exe`; source in `src\ReproStudio.Cli`. | No |
+| `ReproStudio.Runner` | The preview process. One prepared copy per SDK/API and runtime combination. | Yes |
 | `ReproStudio.Shared` | Repro contracts, provisioning, and launch support | No |
 
 Read any project-local `AGENTS.md` before changing that project.
@@ -31,15 +31,28 @@ to an old machine with no SDK, no .NET, and no WASDK installed. Any API newer th
 **Everything is self-contained**, for .NET and for WASDK. That is deliberate. Do
 not switch anything to framework-dependent to shrink the build.
 
+**SDK/API and native runtime are separate choices.** Matching them is the normal
+path; an explicit SDK override supports compatibility repros. Prepare one coherent
+managed projection/dependency set before starting a Runner. Do not change only
+Roslyn references or silently fall back to the base API surface. Target-machine
+provisioning must not require MSBuild or an installed SDK.
+
 ## Build
 
 Build from the repo root:
 
 ```powershell
+dotnet run
+# Or build without launching:
 dotnet build
 .\out\Debug\x64\ReproStudio.exe samples\hello.cs
 ```
 
+- `dotnet run` discovers the actual root host project. It builds the Runner as a
+  build-only dependency, then starts the host. Pass host arguments after `--`.
+  Do not let the Runner reference add WASDK assemblies/packages to the host.
+- Host source includes are explicit: samples, investigations, Runner source,
+  and old `bin`/`obj` files must never compile into the root host project.
 - The CLI builds directly into `out\<Configuration>\<Platform>\` and the
   Runner into its `runner-base\` subfolder. There is no separate assembly step.
 - Defaults are Debug and x64. Use `-c Release` or `-p:Platform=ARM64` / `x86`
@@ -52,9 +65,10 @@ dotnet build
   ```
 - Keep the root build configuration files. They set the output layout and stop
   MSBuild's upward search from finding unrelated parent settings.
-- There are no tests. Verify by running it.
+- `.\tools\smoke.ps1` exercises the source-to-bundle workflow with isolated
+  outputs/cache. There is no separate test framework. Run the app for UI changes.
 
-**To test a Runner change, run `dotnet build` and use the exe under `out`.**
+**To test a Runner change, use `dotnet run`, or build and use the exe under `out`.**
 The build refreshes `runner-base` directly. Old exes under `bin\` or an old packed
 bundle are not refreshed and can still run stale code.
 
@@ -90,8 +104,8 @@ ReproStudio.exe samples\hello.cs --payload D:\my-winui-build
 
 They get copied over the provisioned runner, so a private `Microsoft.ui.xaml.dll`
 beats the stock one. A `payload\` folder next to the exe is used automatically, and
-`--payload none` ignores it. Payload runners provision into a separate
-`<version>+payload` cache folder so stock runs stay stock.
+`--payload none` ignores it. Payload content participates in the SDK/runtime
+pair's cache key, so stock runs stay stock.
 
 `--winui <path.nupkg>` is the other route, for a full built package rather than
 loose files. Use `--payload` for a fast edit-build-test loop.

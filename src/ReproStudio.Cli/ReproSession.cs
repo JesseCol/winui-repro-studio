@@ -12,7 +12,7 @@ namespace ReproStudio_Cli;
 /// when it changes, we relaunch; when it does not, we just push.
 /// </para>
 /// </summary>
-internal sealed class ReproSession : IDisposable
+internal sealed partial class ReproSession : IDisposable
 {
     /// <summary>How long to wait after a file change, so one save is one reload.</summary>
     private static readonly TimeSpan SaveDebounce = TimeSpan.FromMilliseconds(150);
@@ -37,6 +37,9 @@ internal sealed class ReproSession : IDisposable
 
     private readonly RunnerProvisioner _provisioner;
     private readonly RunnerHost _host;
+    private readonly RunnerControlHost _controlHost = new();
+    private bool _useRuntimeHeaders;
+    private string? _pendingHeaderReloadText;
 
     /// <summary>Serialises reloads against each other and against the health check.</summary>
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -61,10 +64,12 @@ internal sealed class ReproSession : IDisposable
 
     /// <summary>What the running runner was launched with, or null if none is running.</summary>
     private LaunchPlan? _running;
+    private RunnerPairInfo? _runningPair;
 
     /// <summary>Size of runner.log when we launched, so a crash report shows only new lines.</summary>
     private long _logOffset;
     private Guid _requestId;
+    private string _requestSourceText = string.Empty;
     private Guid _reportedCapture;
     private Guid _timedOutCapture;
     private long _captureDeadline;
@@ -96,13 +101,14 @@ internal sealed class ReproSession : IDisposable
     /// </summary>
     private readonly record struct LaunchPlan(
         string? Version,
+        string Sdk,
         string WinUiKey,
         string PayloadKey,
         string ProcessLaunchKey,
         bool Packaged,
         int Dpi)
     {
-        public string Describe(bool includePackageIdentity = true) => (Version ?? "winui-only")
+        public string Describe(bool includePackageIdentity = true) => "API " + Sdk + "; native " + (Version ?? "winui-only")
             + (WinUiKey.Length == 0 ? string.Empty : " + winui " + WinUiKey)
             + (PayloadKey.Length == 0 ? string.Empty : " + payload " + PayloadKey)
             + (ProcessLaunchKey.Length == 0 ? string.Empty : " + process launch hook")
@@ -139,15 +145,15 @@ internal sealed class ReproSession : IDisposable
         Log.Field("file", _filePath);
         if (_options.File is null)
         {
-            Log.Detail("No file specified; using the bundled hello sample.");
+            Log.Detail("Starting the hello sample. Edit the file above and save to change the preview.");
         }
 
         Log.Field("cache", _layout.CacheRoot);
         Log.Field("runner", _layout.BaseRunnerDir, _layout.IsPortable ? "(portable)" : "(dev)");
+        Log.Field("runner log", RunnerLogPath);
         if (_screenshotPath is not null && !_options.ProvisionOnly)
         {
             Log.Field("screenshot", _screenshotPath);
-            Log.Field("runner log", RunnerLogPath);
             try
             {
                 string directory = Path.GetDirectoryName(_screenshotPath)
@@ -312,10 +318,13 @@ internal sealed class ReproSession : IDisposable
         }
 
         ParsedSnippetFile parsed = SnippetFileParser.Parse(text);
+        bool isHeaderNotification = _pendingHeaderReloadText == text;
+        _pendingHeaderReloadText = null;
 
         if (!parsed.HasXaml)
         {
             Log.Warn("No 'string Xaml = ...' literal found, so there is nothing to render.");
+            Log.Detail("Keep the class wrapper and Xaml literal from samples\\hello.cs.");
         }
 
         LaunchPlan plan;
@@ -328,23 +337,26 @@ internal sealed class ReproSession : IDisposable
             string? version = await ResolveVersionAsync(parsed.WasdkVersion, winui).ConfigureAwait(false);
             plan = new LaunchPlan(
                 version,
+                await ResolveSdkAsync((_useRuntimeHeaders ? null : _options.Sdk) ?? parsed.Sdk, _ct).ConfigureAwait(false),
                 winui?.CacheKey ?? string.Empty,
                 payload?.Fingerprint ?? string.Empty,
                 parsed.ProcessLaunchKey,
                 _options.Packaged ?? parsed.Packaged ?? false,
                 parsed.Dpi ?? 100);
         }
-        catch (Exception ex) when (ex is IOException or HttpRequestException or InvalidOperationException or TaskCanceledException)
+        catch (Exception ex) when (ex is IOException or HttpRequestException or InvalidOperationException or TaskCanceledException or ArgumentException)
         {
             Log.Error(ex.Message);
             return false;
         }
 
-        Snippet snippet = BuildSnippet(parsed, plan);
-        _requestId = _host.WriteRequest(snippet);
+        Snippet snippet = BuildSnippet(parsed, plan, winui);
 
         if (_running == plan)
         {
+            // The header commit's watcher event must not render twice after a UI restart.
+            if (isHeaderNotification) return true;
+            WriteRenderRequest(snippet, text);
             _captureDeadline = Environment.TickCount64 + (long)CaptureTimeout.TotalMilliseconds;
             Log.Event("pushed" + (parsed.Title is { Length: > 0 } t ? "  " + t : string.Empty));
             return true;
@@ -355,14 +367,15 @@ internal sealed class ReproSession : IDisposable
             Log.Event("relaunching: " + plan.Describe());
         }
 
-        return await ProvisionAndLaunchAsync(plan, winui, payload, firstRun).ConfigureAwait(false);
+        return await ProvisionAndLaunchAsync(plan, winui, payload, snippet, text, firstRun).ConfigureAwait(false);
     }
 
-    private async Task<bool> ProvisionAndLaunchAsync(LaunchPlan plan, WinUiOverride? winui, RunnerPayload? payload, bool firstRun)
+    private async Task<bool> ProvisionAndLaunchAsync(LaunchPlan plan, WinUiOverride? winui, RunnerPayload? payload, Snippet snippet, string sourceText, bool firstRun)
     {
         if (firstRun)
         {
             Log.Step("provision");
+            Log.Field("API choice", plan.Sdk);
             if (plan.Version is not null)
             {
                 Log.Field("wasdk", plan.Version);
@@ -394,7 +407,7 @@ internal sealed class ReproSession : IDisposable
         {
             var progress = new Progress<ProvisionProgress>(p => Log.Detail(p.Message));
             exe = await _provisioner
-                .EnsureRunnerAsync(plan.Version, _layout.BaseRunnerDir, winui, payload, progress, _ct)
+                .EnsureRunnerAsync(plan.Version, _layout.BaseRunnerDir, winui, payload, progress, _ct, plan.Sdk)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException)
@@ -421,6 +434,22 @@ internal sealed class ReproSession : IDisposable
             return true;
         }
 
+        return await LaunchPreparedAsync(plan, exe, snippet, sourceText, firstRun).ConfigureAwait(false);
+    }
+
+    private void WriteRenderRequest(Snippet snippet, string sourceText)
+    {
+        _requestId = _host.WriteRequest(snippet);
+        _requestSourceText = sourceText;
+    }
+
+    private async Task<bool> LaunchPreparedAsync(LaunchPlan plan, string exe, Snippet snippet, string sourceText, bool firstRun)
+    {
+        snippet.Pair = RunnerPairManifest.Read(Path.GetDirectoryName(exe)!)?.Pair
+            ?? throw new InvalidOperationException("Provisioned Runner is missing verified SDK/runtime metadata.");
+        Log.Field("API/SDK", snippet.Pair.ApiLabel);
+        Log.Field("native", snippet.Pair.NativeLabel);
+        Log.Field("managed", "Microsoft.WinUI " + snippet.Pair.WinUiFileVersion, snippet.Pair.RuntimeIdentifier);
         if (firstRun)
         {
             Log.Step("launch");
@@ -428,6 +457,10 @@ internal sealed class ReproSession : IDisposable
 
         _logOffset = CurrentRunnerLogLength();
 
+        // Do not let the old runtime render a request claiming the new runtime.
+        // Provisioning and all fallible source preflight happened before this point.
+        _host.Stop();
+        WriteRenderRequest(snippet, sourceText);
         RunnerHost.LaunchResult result = await _host
             .LaunchAsync(
                 exe,
@@ -454,6 +487,7 @@ internal sealed class ReproSession : IDisposable
         }
 
         _running = plan;
+        _runningPair = snippet.Pair;
         _captureDeadline = Environment.TickCount64 + (long)CaptureTimeout.TotalMilliseconds;
 
         string mode = result.ModeNote.Trim();
@@ -470,18 +504,31 @@ internal sealed class ReproSession : IDisposable
         return true;
     }
 
-    private Snippet BuildSnippet(ParsedSnippetFile parsed, LaunchPlan plan) => new()
+    private Snippet BuildSnippet(ParsedSnippetFile parsed, LaunchPlan plan, WinUiOverride? winui) => new()
     {
+        SourcePath = _filePath,
+        PreferencesPath = RunnerPreferences.GetPath(_layout.CacheRoot),
+        ControlHost = _options.Watch ? _controlHost : null,
         Title = parsed.Title,
         WasdkVersion = plan.Version,
+        WinUiToken = winui?.LocalNupkgPath ?? winui?.NuGetVersion,
+        Sdk = plan.Sdk,
+        Pair = _running == plan ? _runningPair : null,
         Dpi = plan.Dpi,
         Theme = parsed.Theme,
         FlowDirection = parsed.FlowDirection,
         Background = parsed.Background,
-        Topmost = parsed.Topmost,
         Xaml = parsed.Xaml,
         CSharp = parsed.CSharp,
     };
+
+    private async Task<string> ResolveSdkAsync(string? token, CancellationToken ct)
+    {
+        string sdk = SdkSelection.Normalize(token);
+        string resolved = await SdkSelection.ResolveAsync(sdk, GetVersionsAsync, ct).ConfigureAwait(false);
+        if (resolved != sdk) Log.Detail("API/SDK " + sdk + " resolved to " + resolved);
+        return resolved;
+    }
 
     /// <summary>
     /// Turns a version token into a real version. A fully written version is used as-is so
@@ -494,7 +541,7 @@ internal sealed class ReproSession : IDisposable
     /// </summary>
     private async Task<string?> ResolveVersionAsync(string? headerToken, WinUiOverride? winui)
     {
-        string? token = _options.Wasdk ?? headerToken;
+        string? token = (_useRuntimeHeaders ? null : _options.Wasdk) ?? headerToken;
 
         if (token is not { Length: > 0 } && winui is not null)
         {
@@ -573,7 +620,7 @@ internal sealed class ReproSession : IDisposable
     /// </summary>
     private WinUiOverride? ResolveWinUi(string? headerToken)
     {
-        string? token = _options.WinUi ?? headerToken;
+        string? token = (_useRuntimeHeaders ? null : _options.WinUi) ?? headerToken;
         if (token is not { Length: > 0 } || token.Equals("default", StringComparison.OrdinalIgnoreCase))
         {
             return null;
@@ -734,6 +781,7 @@ internal sealed class ReproSession : IDisposable
     private void PrintWatchGuidance()
     {
         Log.Blank();
+        Log.Detail("Save the file to refresh the preview. No project rebuild needed.");
         Log.Detail(_canReadKeys
             ? "Press V for WASDK versions. Ctrl+C to stop."
             : "Use --list to see available WASDK versions. Ctrl+C to stop.");
@@ -809,7 +857,7 @@ internal sealed class ReproSession : IDisposable
                     Log.Error("Could not list WASDK versions: " + error);
                 }
 
-                if (_options.Wasdk is { Length: > 0 })
+                if (!_useRuntimeHeaders && _options.Wasdk is { Length: > 0 })
                 {
                     Log.Detail("--wasdk overrides the file header; omit it to switch versions by editing.");
                 }
@@ -835,6 +883,7 @@ internal sealed class ReproSession : IDisposable
     {
         CancellationToken ct = cancellation.Token;
         Task? versionDisplay = null;
+        Task controls = ProcessControlsAsync(ct);
         long lastHealthCheck = Environment.TickCount64;
         try
         {
@@ -908,6 +957,7 @@ internal sealed class ReproSession : IDisposable
         finally
         {
             await cancellation.CancelAsync().ConfigureAwait(false);
+            await controls.ConfigureAwait(false);
             if (versionDisplay is not null)
             {
                 await versionDisplay.ConfigureAwait(false);

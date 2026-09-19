@@ -212,7 +212,9 @@ internal static class Doctor
         Log.Field("runners", provisioned.Length == 0 ? "none provisioned yet" : Describe(versions));
         foreach (string name in provisioned)
         {
-            Log.Detail(name);
+            RunnerPairManifest? manifest = RunnerPairManifest.Read(Path.Combine(versions, name));
+            Log.Detail(manifest is null ? name + " (legacy native-only cache; not reused)"
+                : name + ": " + manifest.Pair.Describe());
         }
 
         CheckWritable(layout.CacheRoot, findings);

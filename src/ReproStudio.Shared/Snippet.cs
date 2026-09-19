@@ -13,6 +13,21 @@ public sealed class Snippet
     /// <summary>IPC correlation for this render request; assigned by the host.</summary>
     public Guid RequestId { get; set; }
 
+    /// <summary>The original .cs file, never the generated request JSON.</summary>
+    public string? SourcePath { get; set; }
+
+    /// <summary>Host-resolved, version-independent writable preference file.</summary>
+    public string? PreferencesPath { get; set; }
+
+    public RunnerControlHost? ControlHost { get; set; }
+
+    /// <summary>Effective launch selection, including a possible advanced CLI dual override.</summary>
+    public string? WinUiToken { get; set; }
+
+    public string? Sdk { get; set; }
+
+    public RunnerPairInfo? Pair { get; set; }
+
     public string? Title { get; set; }
 
     public string? Notes { get; set; }
@@ -31,9 +46,6 @@ public sealed class Snippet
 
     /// <summary>Live field: optional stage background, e.g. "#202020".</summary>
     public string? Background { get; set; }
-
-    /// <summary>Live field: keep the runner window above other windows.</summary>
-    public bool Topmost { get; set; }
 
     /// <summary>Live field: the XAML to render.</summary>
     public string Xaml { get; set; } = string.Empty;

@@ -5,10 +5,10 @@ This file only covers what is surprising about *this* project.
 
 ## What it is
 
-The process that actually renders a repro. It is built **once**, self-contained,
-against the newest WASDK. That build gets copied into a folder per WASDK version,
-and each copy has that version's **native** DLLs overlaid on top. So one build has
-to be able to run on top of any version's native runtime.
+The process that actually renders a repro. Its code-only binary is built
+**once**, self-contained, against a baseline WASDK. The host prepares a folder
+with a coherent selected **managed SDK/API** payload and a selected **native**
+runtime before starting it. Those choices normally match but may differ.
 
 That constraint drives almost everything below.
 
@@ -45,9 +45,11 @@ started".
 **Do not use APIs newer than Windows 10 1809** without a runtime feature check.
 That is the floor for this project.
 
-**Be careful adding managed WASDK API usage.** The managed projections are pinned
-at the base version even when the native DLLs are older, so a call that compiles
-fine can hit a native entry point that does not exist on an older runtime.
+**Keep the Runner's own API requirements compatible.** Selected managed
+projections must satisfy the Runner as well as the snippet. Equal assembly
+versions do not guarantee equal APIs. A snippet built against a newer SDK can
+also call a native interface absent from an older runtime; surface that failure
+with both selections, not a silent fallback or mixed managed type identities.
 
 ## Launch modes
 
@@ -92,6 +94,8 @@ is self-contained, and whether a stale `resources.pri` is present.
 
 ```powershell
 dotnet build
+# Build the host and Runner, then launch the host:
+dotnet run -- samples\hello.cs
 ```
 
 Use the `dotnet` CLI (SDK 10.x); VS2022's MSBuild fails with NETSDK1045 on net10.
@@ -101,6 +105,6 @@ from the build output before rebuilding.
 
 The Runner builds directly into
 `out\<Configuration>\<Platform>\runner-base\`. The CLI is one level above.
-After changing anything here, rebuild and run
-`.\out\Debug\x64\ReproStudio.exe samples\hello.cs` from the repo root.
+After changing anything here, use `dotnet run -- samples\hello.cs` from the repo
+root, or rebuild and run `.\out\Debug\x64\ReproStudio.exe samples\hello.cs`.
 No packing or manual copy is needed. `--doctor` shows which base is in use.
